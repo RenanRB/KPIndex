@@ -2,7 +2,7 @@ name: Minute Search
 
 on:
   schedule:
-    - cron: '* * * * *'  # Executa a cada minuto
+    - cron: '5 * * * *'  # Executa a cada minuto
 
 jobs:
   build:
