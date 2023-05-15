@@ -1,8 +1,8 @@
-name: Hourly Search
+name: Minute Search
 
 on:
   schedule:
-    - cron: '* * * * *'  # Executa a cada hora
+    - cron: '* * * * *'  # Executa a cada minuto
 
 jobs:
   build:
@@ -20,6 +20,13 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run hourly search
+      - name: Run minute search
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python search.py
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add data/forecast.json
+          git commit -m "Update forecast.json"
+          git push
