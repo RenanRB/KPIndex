@@ -1,8 +1,9 @@
-name: Minute Search
+name: 01 - Default Workflow
 
 on:
   schedule:
-    - cron: '5 * * * *'  # Executa a cada minuto
+  - cron: "5 * * * *" # Runs at 00:00 UTC
+  workflow_dispatch:
 
 jobs:
   build:
