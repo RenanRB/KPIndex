@@ -1,4 +1,4 @@
-name: 01 - Default Workflow
+name: get kp index
 
 on:
   schedule:
