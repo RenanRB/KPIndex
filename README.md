@@ -1,6 +1,6 @@
 **Project Description:**
 
-This project performs an hourly search for updates on the geomagnetic activity index (KP) and updates the data in a JSON file for easy retrieval. The information is obtained from the website [Space Weather GFZ-Potsdam](https://spaceweather.gfz-potsdam.de/), which updates every 3 hours and provides the index for the next 3 days. To access the information, simply call the file [kp.json](https://raw.githubusercontent.com/RenanRB/KPIndex/main/data/kp.json) directly from your application.
+This project performs an hourly search for updates on the geomagnetic activity index (KP) and updates the data in a JSON file for easy retrieval. The information is obtained from the website [Space Weather GFZ-Potsdam](https://spaceweather.gfz-potsdam.de/), which updates every 3 hours and provides the index for the next 3 days. To access the information, simply call the file [kp.json](https://api.github.com/repos/RenanRB/KPIndex/contents/data/kp.json?ref=main) directly from your application.
 
 The purpose of this project is to provide an up-to-date and easily accessible source of geomagnetic activity data. By automating the retrieval and storage process, users can rely on the JSON file for their applications without having to manually scrape the website.
 
