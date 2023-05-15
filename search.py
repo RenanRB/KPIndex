@@ -21,5 +21,5 @@ for line in lines:
         forecast_list.append(forecast)
 
 # Salvar o resultado em formato JSON no diretório 'data' do repositório
-with open('data/kp.json', 'w') as file:
+with open('new_kp.json', 'w') as file:
     json.dump(forecast_list, file)
