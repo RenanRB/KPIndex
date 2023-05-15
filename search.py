@@ -38,7 +38,6 @@ def merge_and_save_data():
 
     with open('new_kp.json', 'w') as file:
         json.dump(site1_data, file, indent=4)
-    print('Merged data successfully saved!')
 
 def get_date(year, day_of_year, hour):
     date = datetime.datetime(year, 1, 1) + datetime.timedelta(day_of_year - 1)
