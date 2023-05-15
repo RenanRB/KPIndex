@@ -12,8 +12,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
-        env:
-           token: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          github-token: ${{ secrets.token }}
 
       - name: Set up Python
         uses: actions/setup-python@v2
@@ -24,8 +24,6 @@ jobs:
         run: pip install requests
 
       - name: Run minute search
-        env:
-           token: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python search.py
           git config user.name github-actions
