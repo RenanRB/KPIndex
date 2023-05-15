@@ -25,7 +25,7 @@ jobs:
 
       - name: Run minute search
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           access-token: ${{ secrets.ACCESS_TOKEN }}
         run: |
           python search.py
           git config user.name github-actions
