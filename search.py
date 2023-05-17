@@ -2,6 +2,8 @@ import requests
 import json
 import datetime
 
+today = datetime.datetime.now().strftime('%Y-%m-%d')
+
 # Function to fetch data from the first site
 def fetch_site1_data():
     url = 'https://spaceweather.gfz-potsdam.de/fileadmin/ruggero/Kp_forecast/forecast_figures/KP_FORECAST_CURRENT.dat'
@@ -16,7 +18,7 @@ def fetch_site1_data():
 
 # Function to fetch data from the second site
 def fetch_site2_data():
-    url = 'https://kp.gfz-potsdam.de/app/json/?start=2023-05-15T00%3A00%3A00Z&end=2023-05-15T23%3A59%3A59Z&index=Kp#kpdatadownload-143'
+    url = f'https://kp.gfz-potsdam.de/app/json/?start={today}T00%3A00%3A00Z&end={today}T23%3A59%3A59Z&index=Kp#kpdatadownload-143'
     response = requests.get(url)
     data = json.loads(response.text)
     datetime = data['datetime']
