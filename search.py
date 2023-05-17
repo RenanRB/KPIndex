@@ -11,7 +11,7 @@ def fetch_site1_data():
     for line in data:
         year, day, hour, kp = line.split()
         date = get_date(int(year), int(day), int(hour))
-        result.append(['datetime': f'{date}', 'kp': float(kp)])
+        result.append({'datetime': f'{date}', 'kp': float(kp)})
     return result
 
 # Function to fetch data from the second site
@@ -23,7 +23,7 @@ def fetch_site2_data():
     kp = data['Kp']
     result = []
     for dt, kp_value in zip(datetime, kp):
-        result.append(['datetime': dt, 'kp': kp_value])
+        result.append({'datetime': dt, 'kp': kp_value})
     return result
 
 # Function to merge the data and save it to a local JSON file
