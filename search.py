@@ -1,34 +1,43 @@
-import requests
+import csv
 import json
-import datetime
+import requests
+from datetime import datetime, timedelta
 
-today = datetime.datetime.now().strftime('%Y-%m-%d')
-
-# Function to fetch data from the first site
 def fetch_site1_data():
-    url = 'https://spaceweather.gfz-potsdam.de/fileadmin/ruggero/Kp_forecast/forecast_figures/KP_FORECAST_CURRENT.dat'
+    fixed_hours = [3, 6, 9, 12, 15, 18, 21, 23]
+    url = 'https://spaceweather.gfz-potsdam.de/fileadmin/Kp-Forecast/CSV/kp_product_file_FORECAST_PAGER_SWIFT_LAST.csv'
     response = requests.get(url, verify=False)
-    data = response.text.split('\n')[:-1]
-    result = []
-    for line in data:
-        year, day, hour, kp = line.split()
-        date = get_date(int(year), int(day), int(hour))
-        result.append({'datetime': f'{date}', 'kp': float(kp)})
-    return result
+    lines = response.text.split('\n')
 
-# Function to fetch data from the second site
+    forecast_list = []
+    for line in csv.reader(lines[1:]):
+        if len(line) > 1:
+            date_time_str = line[0]
+            kp = float(line[5])
+            date_time_obj = datetime.strptime(date_time_str, '%d-%m-%Y %H:%M')
+            closest_hour = min(fixed_hours, key=lambda x: abs(x - date_time_obj.hour))
+            if closest_hour == 23:
+                closest_hour = 0
+                date_time_obj += timedelta(days=1)
+            date_time_obj = date_time_obj.replace(hour=closest_hour)
+            forecast_list.append({
+                "datetime": date_time_obj.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                "kp": kp
+            })
+    return forecast_list
+
 def fetch_site2_data():
+    today = datetime.now().strftime('%Y-%m-%d')
     url = f'https://kp.gfz-potsdam.de/app/json/?start={today}T00%3A00%3A00Z&end={today}T23%3A59%3A59Z&index=Kp#kpdatadownload-143'
     response = requests.get(url, verify=False)
     data = json.loads(response.text)
-    datetime = data['datetime']
+    date_time_obj = data['datetime']
     kp = data['Kp']
     result = []
-    for dt, kp_value in zip(datetime, kp):
+    for dt, kp_value in zip(date_time_obj, kp):
         result.append({'datetime': dt, 'kp': kp_value})
     return result
 
-# Function to merge the data and save it to a local JSON file
 def merge_and_save_data():
     site1_data = fetch_site1_data()
     site2_data = fetch_site2_data()
