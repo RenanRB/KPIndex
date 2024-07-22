@@ -1,0 +1,35 @@
+name: get kp index from noaa
+
+on:
+  schedule:
+  - cron: "5 * * * *" # Runs at 00:00 UTC
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.x
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run minute search
+        run: |
+          python search_noaa.py > new_kp.json
+          if ! cmp -s new_kp.json data/kp_noaa.json; then
+            mv new_kp.json data/kp_noaa.json
+            git config --global user.name 'GitHub Actions'
+            git config --global user.email 'actions@github.com'
+            git pull
+            git add data/kp_noaa.json
+            git commit -m "Update kp_noaa.json"
+            git push
+          fi
