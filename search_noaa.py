@@ -24,7 +24,7 @@ def fetch_and_process_hour_data(url):
             start_date = next_day.replace(hour=0, minute=0, second=0, microsecond=0)
         if start_date and len(splited_lide) == 4 and 'UT' in splited_lide[0]:
             for j, kp in enumerate(splited_lide[1:]):
-                kp_value = kp
+                kp_value = float(kp)
                 datetime_str = (start_date + timedelta(days=j)).strftime('%Y-%m-%dT%H:%M:%SZ')
                 kp_data[j].append({
                     "datetime": datetime_str,
@@ -54,7 +54,7 @@ def fetch_and_process_daily_data(url):
             for i in range(8):
                 kp_data.append({
                     "datetime": date_data.strftime('%Y-%m-%dT%H:%M:%SZ'),
-                    "kp": splitedLide[5]
+                    "kp": float(splitedLide[5])
                 })
 
                 date_data = date_data + timedelta(hours=3)
