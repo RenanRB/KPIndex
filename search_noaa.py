@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta, time
 
 url_hour = 'https://services.swpc.noaa.gov/text/3-day-geomag-forecast.txt'
-url_daily = 'https://services.swpc.noaa.gov/text/27-day-outlook.txt2'
+url_daily = 'https://services.swpc.noaa.gov/text/27-day-outlook.txt'
 
 def fetch_and_process_hour_data(url):
     response = requests.get(url, verify=False)
