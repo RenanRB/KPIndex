@@ -39,7 +39,7 @@ def fetch_site2_data():
     return result
 
 def fetch_site3_data():
-    url = 'https://services.swpc.noaa.gov/text/27-day-outlook.txt2'
+    url = 'https://services.swpc.noaa.gov/text/27-day-outlook.txt'
     response = requests.get(url, verify=False)
     data = response.text.splitlines()
     start_date = None
