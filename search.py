@@ -64,7 +64,7 @@ def fetch_site3_data():
             for i in range(8):
                 kp_data.append({
                     "datetime": date_data.strftime('%Y-%m-%dT%H:%M:%SZ'),
-                    "kp": splitedLide[5]
+                    "kp": int(splitedLide[5])
                 })
 
                 date_data = date_data + timedelta(hours=3)
