@@ -29,9 +29,11 @@ def fetch_site1_data():
     return forecast_list
 
 def fetch_site2_data():
-    today = datetime.now().strftime('%Y-%m-%d')
-    yesteday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    url = f'https://kp.gfz-potsdam.de/app/json/?start={yesteday}T12%3A00%3A00Z&end={today}T23%3A59%3A59Z&index=Kp#kpdatadownload-143'
+    today = datetime.now()
+    last12Hours = datetime.now() - timedelta(hours=12)
+    if today.day == last12Hours.day:
+        last12Hours = last12Hours.replace(hour=0, minute=0, second=0, microsecond=0)
+    url = f'https://kp.gfz-potsdam.de/app/json/?start={ last12Hours.strftime("%Y-%m-%dT%H:%M:%SZ") }&end={ today.strftime("%Y-%m-%d") }T23%3A59%3A59Z&index=Kp#kpdatadownload-143'
     response = requests.get(url, verify=False)
     data = json.loads(response.text)
     date_time_obj = data['datetime']
@@ -89,7 +91,7 @@ def merge_infos(kp_hour_data, kp_daily_data):
 
         first_date = datetime.today()
 
-    limit_date = first_date + timedelta(days=7, hours=12)
+    limit_date = first_date + timedelta(days=8)
 
 
     kp_diario_filtrado = [
