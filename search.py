@@ -30,7 +30,7 @@ def fetch_site1_data():
 
 def fetch_site2_data():
     today = datetime.now()
-    last12Hours = datetime.now() - timedelta(hours=12)
+    last12Hours = datetime.now() - timedelta(days=1, hours=15)
     if today.day == last12Hours.day:
         last12Hours = last12Hours.replace(hour=0, minute=0, second=0, microsecond=0)
     url = f'https://kp.gfz-potsdam.de/app/json/?start={ last12Hours.strftime("%Y-%m-%dT%H:%M:%SZ") }&end={ today.strftime("%Y-%m-%d") }T23%3A59%3A59Z&index=Kp#kpdatadownload-143'
