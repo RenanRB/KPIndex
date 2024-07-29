@@ -89,7 +89,7 @@ def merge_infos(kp_hour_data, kp_daily_data):
 
         first_date = datetime.today()
 
-    limit_date = first_date + timedelta(days=8)
+    limit_date = first_date + timedelta(days=9)
 
 
     kp_diario_filtrado = [
