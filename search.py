@@ -13,7 +13,7 @@ def fetch_site1_data():
     for line in csv.reader(lines[1:]):
         if len(line) > 1:
             date_time_str = line[0]
-            kp = float(line[5])
+            kp = float(line[3])
             date_time_obj = datetime.strptime(date_time_str, '%d-%m-%Y %H:%M')
             closest_hour = min(fixed_hours, key=lambda x: abs(x - date_time_obj.hour))
             if closest_hour == 23:
