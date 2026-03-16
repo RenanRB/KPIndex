@@ -2,7 +2,7 @@ name: get kp index
 
 on:
   schedule:
-  - cron: "0 * * * *" # Runs at 00:00 UTC
+  - cron: "2 * * * *" # Runs at the 2nd minute of every hour
   workflow_dispatch:
 
 jobs:
