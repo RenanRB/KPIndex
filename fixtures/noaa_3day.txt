@@ -1,0 +1,25 @@
+:Product: Geomagnetic Forecast
+:Issued: 2026 Sep 15 2205 UTC
+# Prepared by the U.S. Dept. of Commerce, NOAA, Space Weather Prediction Center
+#
+NOAA Ap Index Forecast
+Observed Ap 14 Sep 011
+Estimated Ap 15 Sep 014
+Predicted Ap 16 Sep-18 Sep 020-022-012
+
+NOAA Geomagnetic Activity Probabilities 16 Sep-18 Sep
+Active                30/35/35
+Minor storm           40/45/20
+Moderate storm        10/10/05
+Strong-Extreme storm  01/01/01
+
+NOAA Kp index forecast 16 Sep - 18 Sep
+             Sep 16    Sep 17    Sep 18
+00-03UT        3.67      4.00      3.67      
+03-06UT        3.33      4.67      2.00      
+06-09UT        3.00      3.67      2.00      
+09-12UT        2.67      3.33      2.67      
+12-15UT        3.00      3.33      2.67      
+15-18UT        3.33      3.33      2.67      
+18-21UT        3.67      3.33      2.67      
+21-00UT        4.67      3.33      3.00      

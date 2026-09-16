@@ -21,24 +21,27 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          # Pinned so a new interpreter cannot reach the scheduled runs
+          # before the test matrix has covered it.
+          python-version: '3.13'
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install -r requirements.txt
 
       - name: Fetch Kp data
         run: python search.py
 
       - name: Commit updated data
         run: |
-          # search.py leaves no file when every source was unreachable.
+          # search.py writes nothing when a source was unreachable.
           if [ ! -s new_kp.json ]; then
             echo "No new data produced, keeping data/kp.json as is."
             exit 0
           fi
 
-          python -c "import json,sys; d=json.load(open('new_kp.json')); sys.exit(0 if isinstance(d, list) and d else 1)" \
-            || { echo "::error::new_kp.json is not a valid non-empty list."; exit 1; }
+          # Second gate: the file must satisfy every Kp invariant on its own
+          # terms before it is allowed to replace known-good data.
+          python validate_data.py new_kp.json
 
           if cmp -s new_kp.json data/kp.json; then
             echo "Data unchanged."

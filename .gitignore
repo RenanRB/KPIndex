@@ -1,0 +1,10 @@
+# Intermediate output of the pipelines; only data/ is committed.
+new_kp.json
+*.tmp
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.coverage
+htmlcov/

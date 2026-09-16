@@ -1,0 +1,4 @@
+# Runtime dependency of the Kp pipelines.
+# Pinned with a lower bound so a security fix still lands, and an upper
+# bound so a major release cannot change behaviour under a scheduled run.
+requests>=2.31,<3

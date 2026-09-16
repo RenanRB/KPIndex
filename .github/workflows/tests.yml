@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'data/**'   # the hourly data commits do not change behaviour
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor the code supports; 3.13 is what the scheduled
+        # runs get today. Both are tested so a runner upgrade cannot break
+        # the pipelines unnoticed.
+        python-version: ['3.11', '3.13']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m unittest discover -p 'test_*.py' -v
+
+      - name: Check the committed data still satisfies every Kp invariant
+        run: python validate_data.py
