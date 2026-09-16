@@ -2,6 +2,7 @@ import csv
 import json
 import logging
 from datetime import datetime, timedelta, time
+from time import sleep
 import requests
 import urllib3
 
@@ -14,19 +15,44 @@ GFZ_REALTIME_URL_TEMPLATE = 'https://kp.gfz-potsdam.de/app/json/?start={start}T0
 NOAA_OUTLOOK_URL = 'https://services.swpc.noaa.gov/text/27-day-outlook.txt'
 OUTPUT_FILE = 'new_kp.json'
 
+# The GFZ hosts drop connections fairly often, so every request is retried with
+# an exponential backoff before the whole run is considered a failure.
+REQUEST_TIMEOUT = (15, 45)  # (connect, read) seconds
+MAX_ATTEMPTS = 4
+BACKOFF_SECONDS = 5
+
+
+def fetch_url(url: str) -> requests.Response:
+    """Fetches a URL, retrying transient network errors with exponential backoff."""
+    last_error = None
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            response = requests.get(url, verify=False, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            return response
+        except requests.RequestException as error:
+            last_error = error
+            if attempt == MAX_ATTEMPTS:
+                break
+            delay = BACKOFF_SECONDS * (2 ** (attempt - 1))
+            logging.warning(
+                "Attempt %d/%d failed for %s (%s). Retrying in %ds...",
+                attempt, MAX_ATTEMPTS, url, error.__class__.__name__, delay
+            )
+            sleep(delay)
+
+    raise last_error
+
 
 def fetch_csv_data(url: str) -> list[str]:
     """Helper to fetch text data and split it into lines."""
-    response = requests.get(url, verify=False, timeout=15)
-    response.raise_for_status()
-    return response.text.splitlines()
+    return fetch_url(url).text.splitlines()
 
 
 def fetch_json_data(url: str) -> dict:
     """Helper to fetch and parse JSON data."""
-    response = requests.get(url, verify=False, timeout=15)
-    response.raise_for_status()
-    return response.json()
+    return fetch_url(url).json()
 
 
 def fetch_gfz_forecast_csv() -> list[dict]:
@@ -155,14 +181,40 @@ def merge_kp_data(short_term_data: list[dict], long_term_data: list[dict]) -> li
     return merged
 
 
-def get_kp_pipeline():
-    """Main pipeline execution for composing the output JSON."""
+def fetch_source(name: str, fetcher):
+    """Runs a fetcher, converting an unrecoverable failure into None."""
+    try:
+        return fetcher()
+    except Exception as error:
+        logging.error("Source '%s' is unavailable: %s: %s", name, error.__class__.__name__, error)
+        return None
+
+
+def get_kp_pipeline() -> bool:
+    """
+    Main pipeline execution for composing the output JSON.
+    Returns True when a new file was written, False when a source was missing
+    and the previous data should be kept instead.
+    """
     logging.info("Starting Kp fetch pipeline...")
     
     # 1. Fetch data from all sources
-    gfz_forecast = fetch_gfz_forecast_csv()
-    gfz_realtime = fetch_gfz_realtime_json()
-    noaa_outlook = fetch_noaa_27day_outlook()
+    gfz_forecast = fetch_source('GFZ forecast', fetch_gfz_forecast_csv)
+    gfz_realtime = fetch_source('GFZ realtime', fetch_gfz_realtime_json)
+    noaa_outlook = fetch_source('NOAA 27-day outlook', fetch_noaa_27day_outlook)
+    
+    # Every source feeds a different slice of the timeline, so a partial run would
+    # silently publish a truncated forecast. Keeping the previous file is safer.
+    missing = [
+        name for name, data in (
+            ('GFZ forecast', gfz_forecast),
+            ('GFZ realtime', gfz_realtime),
+            ('NOAA 27-day outlook', noaa_outlook),
+        ) if data is None
+    ]
+    if missing:
+        logging.warning("Skipping update, unavailable source(s): %s", ', '.join(missing))
+        return False
     
     # 2. Integrate real-time over forecast (real-time trumps predicted)
     # Using a dictionary automatically handles overwriting duplicate timestamps
@@ -180,8 +232,12 @@ def get_kp_pipeline():
         json.dump(final_result, file, indent=4)
         
     logging.info(f"Successfully saved {len(final_result)} Kp records to {OUTPUT_FILE}")
+    return True
 
 
 if __name__ == '__main__':  # pragma: no cover
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    get_kp_pipeline()
+    if not get_kp_pipeline():
+        # Exit successfully so the scheduled run is not reported as broken for a
+        # transient upstream outage, but flag it on the GitHub Actions summary.
+        print("::warning::Kp sources unavailable, data/kp.json kept unchanged.")

@@ -2,8 +2,13 @@ name: get kp index from noaa
 
 on:
   schedule:
-  - cron: "2 * * * *" # Runs at the 2nd minute of every hour
+  - cron: "17 * * * *" # Offset from the GFZ workflow to avoid push races
   workflow_dispatch:
+
+# Both Kp workflows commit to the same branch, so they must not push at once.
+concurrency:
+  group: kp-data-push
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -14,22 +19,45 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: 3.x
 
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run minute search
+      - name: Fetch Kp data
+        run: python search_noaa.py
+
+      - name: Commit updated data
         run: |
-          python search_noaa.py > new_kp.json
-          if ! cmp -s new_kp.json data/kp_noaa.json; then
-            mv new_kp.json data/kp_noaa.json
-            git config --global user.name 'GitHub Actions'
-            git config --global user.email 'actions@github.com'
-            git pull
-            git add data/kp_noaa.json
-            git commit -m "Update kp_noaa.json"
-            git push
+          # search_noaa.py leaves no file when every source was unreachable.
+          if [ ! -s new_kp.json ]; then
+            echo "No new data produced, keeping data/kp_noaa.json as is."
+            exit 0
           fi
+
+          python -c "import json,sys; d=json.load(open('new_kp.json')); sys.exit(0 if isinstance(d, list) and d else 1)" \
+            || { echo "::error::new_kp.json is not a valid non-empty list."; exit 1; }
+
+          if cmp -s new_kp.json data/kp_noaa.json; then
+            echo "Data unchanged."
+            exit 0
+          fi
+
+          mv new_kp.json data/kp_noaa.json
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add data/kp_noaa.json
+          git commit -m "Update kp_noaa.json"
+
+          # Another scheduled run may have pushed in the meantime.
+          for attempt in 1 2 3; do
+            if git pull --rebase --autostash && git push; then
+              exit 0
+            fi
+            echo "Push attempt $attempt failed, retrying..."
+            sleep 10
+          done
+          echo "::error::Could not push after 3 attempts."
+          exit 1

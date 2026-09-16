@@ -1,15 +1,41 @@
 import requests
 import json
+import logging
 from datetime import datetime, timedelta, time
+from time import sleep
 
 url_hour = 'https://services.swpc.noaa.gov/text/3-day-geomag-forecast.txt'
 url_daily = 'https://services.swpc.noaa.gov/text/27-day-outlook.txt'
 
+# NOAA occasionally refuses or stalls connections, so retry before giving up.
+REQUEST_TIMEOUT = (15, 45)  # (connect, read) seconds
+MAX_ATTEMPTS = 4
+BACKOFF_SECONDS = 5
+
+def fetch_lines(url):
+    """Fetches a text file, retrying transient network errors with exponential backoff."""
+    last_error = None
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            response = requests.get(url, verify=False, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            return response.text.splitlines()
+        except requests.RequestException as error:
+            last_error = error
+            if attempt == MAX_ATTEMPTS:
+                break
+            delay = BACKOFF_SECONDS * (2 ** (attempt - 1))
+            logging.warning(
+                "Attempt %d/%d failed for %s (%s). Retrying in %ds...",
+                attempt, MAX_ATTEMPTS, url, error.__class__.__name__, delay
+            )
+            sleep(delay)
+
+    raise last_error
+
 def fetch_and_process_hour_data(url):
-    response = requests.get(url, verify=False)
-    if (response.status_code != 200):
-        return []
-    data = response.text.splitlines()
+    data = fetch_lines(url)
 
     kp_data = [[],[],[]]
     start_date = None
@@ -35,8 +61,7 @@ def fetch_and_process_hour_data(url):
     return kp_data[0] + kp_data[1] + kp_data[2]
 
 def fetch_and_process_daily_data(url):
-    response = requests.get(url, verify=False)
-    data = response.text.splitlines()
+    data = fetch_lines(url)
     start_date = None
     kp_data = []
 
@@ -96,11 +121,28 @@ def merge_infos(kp_hour_data, kp_daily_data):
     return join_data
 
 def merge_and_save_data():
-    kp_hour_data = fetch_and_process_hour_data(url_hour)
-    kp_daily_data = fetch_and_process_daily_data(url_daily)
+    """Returns True when a new file was written, False when NOAA was unreachable."""
+    try:
+        kp_hour_data = fetch_and_process_hour_data(url_hour)
+        kp_daily_data = fetch_and_process_daily_data(url_daily)
+    except Exception as error:
+        logging.error("NOAA is unavailable: %s: %s", error.__class__.__name__, error)
+        return False
+
     result = merge_infos(kp_hour_data, kp_daily_data)
+    if not result:
+        logging.warning("NOAA returned no usable rows.")
+        return False
 
     with open('new_kp.json', 'w') as file:
         json.dump(result, file, indent=4)
 
-merge_and_save_data()
+    logging.info("Successfully saved %d Kp records to new_kp.json", len(result))
+    return True
+
+if __name__ == '__main__':  # pragma: no cover
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    if not merge_and_save_data():
+        # Exit successfully so the scheduled run is not reported as broken for a
+        # transient upstream outage, but flag it on the GitHub Actions summary.
+        print("::warning::NOAA sources unavailable, data/kp_noaa.json kept unchanged.")
