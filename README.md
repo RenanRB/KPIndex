@@ -53,6 +53,18 @@ each request is retried with exponential backoff, and if a source is still
 unreachable the run finishes green with a warning rather than overwriting good
 data with a partial series.
 
+That tolerance would otherwise create a blind spot — a feed down for days
+would leave the files quietly frozen — so a separate job runs four times a day
+and **fails loudly** once the data has genuinely stopped moving. It checks two
+things: how long since each file last changed, and how far beyond now the
+series still reaches. The staleness budgets come from each file's measured
+update cadence, which differs a lot between them:
+
+| File | Median | Slowest observed | Budget |
+| --- | --- | --- | --- |
+| `kp.json` | 1.3 h | 11.8 h | 18 h |
+| `kp_noaa.json` | 24.0 h | 48.0 h | 72 h |
+
 ## Layout
 
 | Path | Purpose |
@@ -61,6 +73,7 @@ data with a partial series.
 | `search.py` | Builds `data/kp.json` (GFZ + NOAA) |
 | `search_noaa.py` | Builds `data/kp_noaa.json` (NOAA only) |
 | `validate_data.py` | Audits published files; used as the CI gate |
+| `check_freshness.py` | Fails when the data has stopped being updated |
 | `fixtures/` | Verbatim captures of the real feeds, for tests |
 
 ## Development
@@ -70,6 +83,7 @@ pip install -r requirements.txt
 
 python -m unittest discover -p 'test_*.py' -v   # run the tests
 python validate_data.py                         # audit data/
+python check_freshness.py                       # is the data still moving?
 python search.py                                # writes new_kp.json
 ```
 

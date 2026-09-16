@@ -1,0 +1,33 @@
+name: data freshness
+
+# The hourly pipelines finish green when a feed is down, on purpose, so a
+# brief outage does not raise a false alarm. This job is the counterweight:
+# it fails loudly once the data has genuinely stopped moving.
+on:
+  schedule:
+  - cron: "40 */6 * * *" # four times a day, off the data workflows' minutes
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Needed to read when each data file last changed. The repository
+          # is small (~11 MB) despite its many commits, so a full clone is
+          # cheap enough for a job that runs four times a day.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check the data is still being updated
+        run: python check_freshness.py
