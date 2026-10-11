@@ -203,4 +203,17 @@ Tests never touch the network: they run against the captured documents in
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+**The code** in this repository is MIT — see [LICENSE](LICENSE).
+
+**The data** in `data/` is not ours to relicense. It is derived from:
+
+- **GFZ**, under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+  Attribution: *contains data from GFZ Helmholtz Centre for Geosciences, licensed
+  under CC BY 4.0*. The data **has been modified**: bins are selected, snapped to
+  the three-hour grid, merged across sources and re-serialised as JSON.
+- **NOAA SWPC**, a work of the US federal government, in the public domain.
+
+CC BY 4.0 requires attribution, a link to the licence and an indication of
+changes, so anyone redistributing `data/` must carry the notice above. That is
+why the MIT licence covers the code only — applying it to the data would
+misstate the terms the GFZ grants them under.
