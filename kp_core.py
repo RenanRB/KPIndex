@@ -125,6 +125,60 @@ def snap_to_bin(moment: datetime) -> datetime:
     return shifted.replace(hour=(shifted.hour // BIN_HOURS) * BIN_HOURS)
 
 
+def floor_to_bin(moment: datetime) -> datetime:
+    """Truncates a timestamp down to the Kp bin containing it."""
+    return moment.replace(
+        hour=(moment.hour // BIN_HOURS) * BIN_HOURS,
+        minute=0, second=0, microsecond=0,
+    )
+
+
+def build_series(sources, now: datetime, history_days: int, forecast_days: int):
+    """Fills a window anchored on `now` from sources in priority order.
+
+    `sources` is a sequence of (name, records), most trustworthy first. Each
+    bin is taken from the first source that offers it, and anything outside
+    the window is discarded.
+
+    Anchoring the window on the clock rather than on the data is the whole
+    point: a feed that freezes used to drag the window's edges back with it,
+    silently shortening the forecast. Now a stale feed simply contributes
+    nothing in range and the next source fills its place.
+
+    Returns (records, provenance) where provenance maps a timestamp to the
+    name of the source it came from, for logging.
+    """
+    start = floor_to_bin(now) - timedelta(days=history_days)
+    end = floor_to_bin(now) + timedelta(days=forecast_days)
+
+    chosen = {}
+    provenance = {}
+
+    for name, records in sources:
+        for record in records or []:
+            moment = parse_timestamp(record['datetime'])
+            if moment < start or moment > end:
+                continue
+
+            key = format_timestamp(moment)
+            if key in chosen:
+                continue  # a higher-priority source already owns this bin
+
+            chosen[key] = {"datetime": key, "kp": record['kp']}
+            provenance[key] = name
+
+    ordered = [chosen[key] for key in sorted(chosen)]
+    return ordered, provenance
+
+
+def series_horizon(records: list[dict], now: datetime) -> timedelta:
+    """How far beyond `now` the last bin of a series reaches."""
+    if not records:
+        return timedelta(0)
+
+    return parse_timestamp(records[-1]['datetime']) - now
+
+
 def is_aligned(moment: datetime) -> bool:
     """True when the timestamp already sits exactly on a Kp bin."""
     return (

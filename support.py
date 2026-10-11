@@ -8,9 +8,21 @@ idealised version of them.
 import json
 import logging
 import os
+from datetime import datetime
 from unittest.mock import patch
 
 FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
+
+# The captures were taken mid-September 2026. The pipelines publish a window
+# anchored on the current time, so any test that runs one has to pin the
+# clock inside the period the fixtures cover, or the window would fall
+# entirely outside the data.
+#
+#   gfz_realtime.json  14 Sep 00:00 - 15 Sep 21:00  (measured)
+#   gfz_forecast.csv   16 Sep 00:00 - 19 Sep 00:00
+#   noaa_3day.txt      16 Sep - 18 Sep
+#   noaa_27day.txt     14 Sep - 10 Oct
+FIXTURE_NOW = datetime(2026, 9, 16, 12, 0)
 
 # Matched against the requested URL, longest-lived identifiers first.
 FIXTURES = [
@@ -75,3 +87,12 @@ def patch_http(overrides=None):
     """Patches the single place the project performs HTTP."""
     return patch('kp_core.requests.get', side_effect=fake_get(overrides))
 
+
+
+def patch_now(module, moment=None):
+    """Pins the clock a pipeline reads, for window-dependent tests.
+
+    The module is explicit because each pipeline imports utcnow by name, so
+    the binding to replace lives in the pipeline, not in kp_core.
+    """
+    return patch.object(module, 'utcnow', return_value=moment or FIXTURE_NOW)

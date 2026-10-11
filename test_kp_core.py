@@ -18,14 +18,17 @@ import kp_core
 import support
 from kp_core import (
     DataValidationError,
+    build_series,
     clean_kp,
     fetch_json,
     fetch_lines,
     fetch_source,
     fetch_url,
+    floor_to_bin,
     format_timestamp,
     is_aligned,
     parse_timestamp,
+    series_horizon,
     snap_to_bin,
     utcnow,
     validate_series,
@@ -94,6 +97,142 @@ class TestSnapToBin(unittest.TestCase):
     def test_snapping_across_a_leap_day(self):
         self.assertEqual(snap_to_bin(datetime(2028, 2, 28, 23, 30)), datetime(2028, 2, 29, 0))
         self.assertEqual(snap_to_bin(datetime(2028, 2, 29, 23, 30)), datetime(2028, 3, 1, 0))
+
+
+def bins(start, count, kp=2.0, step_hours=3):
+    """A run of consecutive bins starting at `start` (a datetime)."""
+    return [
+        {"datetime": format_timestamp(start + timedelta(hours=step_hours * index)), "kp": kp}
+        for index in range(count)
+    ]
+
+
+class TestFloorToBin(unittest.TestCase):
+
+    def test_truncates_down_to_the_containing_bin(self):
+        cases = [
+            (datetime(2026, 3, 15, 0, 0), datetime(2026, 3, 15, 0)),
+            (datetime(2026, 3, 15, 2, 59), datetime(2026, 3, 15, 0)),
+            (datetime(2026, 3, 15, 3, 0), datetime(2026, 3, 15, 3)),
+            (datetime(2026, 3, 15, 23, 59), datetime(2026, 3, 15, 21)),
+        ]
+        for moment, expected in cases:
+            self.assertEqual(floor_to_bin(moment), expected, moment)
+
+    def test_never_moves_forward(self):
+        for hour in range(24):
+            moment = datetime(2026, 3, 15, hour, 30)
+            self.assertLessEqual(floor_to_bin(moment), moment)
+
+    def test_output_is_always_a_valid_bin(self):
+        for hour in range(24):
+            self.assertTrue(is_aligned(floor_to_bin(datetime(2026, 3, 15, hour, 17))))
+
+
+class TestBuildSeries(unittest.TestCase):
+
+    NOW = datetime(2026, 3, 15, 12, 0)
+
+    def test_window_is_anchored_on_the_clock(self):
+        wide = bins(datetime(2026, 1, 1), 2000)  # far beyond the window both ways
+        records, _ = build_series([('wide', wide)], self.NOW, history_days=2, forecast_days=7)
+
+        self.assertEqual(records[0]['datetime'], '2026-03-13T12:00:00Z')
+        self.assertEqual(records[-1]['datetime'], '2026-03-22T12:00:00Z')
+
+    def test_a_frozen_source_no_longer_shortens_the_future(self):
+        """Regression for the October 2026 outage.
+
+        The GFZ forecast file stopped updating and kept serving bins from
+        eight days earlier. The window used to be anchored on the first
+        record, so that stale feed dragged the far edge backwards and the
+        NOAA tail was filtered out almost entirely: the published series
+        lost its whole forecast while still looking well-formed.
+        """
+        frozen = bins(datetime(2026, 3, 5), 25)             # a week stale
+        measured = bins(datetime(2026, 3, 13, 12), 16, kp=1.0)
+        tail = bins(datetime(2026, 3, 13), 150, kp=5.0)
+
+        records, provenance = build_series(
+            [('measured', measured), ('frozen', frozen), ('tail', tail)],
+            self.NOW, history_days=2, forecast_days=7,
+        )
+
+        # The stale feed contributes nothing and the tail reaches full width.
+        self.assertNotIn('frozen', provenance.values())
+        self.assertEqual(records[-1]['datetime'], '2026-03-22T12:00:00Z')
+        horizon = series_horizon(records, self.NOW)
+        self.assertEqual(horizon, timedelta(days=7))
+
+    def test_higher_priority_source_wins_a_shared_bin(self):
+        first = [{"datetime": "2026-03-15T12:00:00Z", "kp": 1.0}]
+        second = [{"datetime": "2026-03-15T12:00:00Z", "kp": 9.0}]
+
+        records, provenance = build_series(
+            [('first', first), ('second', second)], self.NOW, history_days=2, forecast_days=7
+        )
+
+        self.assertEqual(records, [{"datetime": "2026-03-15T12:00:00Z", "kp": 1.0}])
+        self.assertEqual(provenance['2026-03-15T12:00:00Z'], 'first')
+
+    def test_lower_priority_source_fills_the_gaps(self):
+        first = bins(datetime(2026, 3, 15, 12), 2, kp=1.0)
+        second = bins(datetime(2026, 3, 15, 12), 8, kp=5.0)
+
+        records, provenance = build_series(
+            [('first', first), ('second', second)], self.NOW, history_days=2, forecast_days=7
+        )
+
+        self.assertEqual(len(records), 8)
+        self.assertEqual([record['kp'] for record in records[:2]], [1.0, 1.0])
+        self.assertEqual([record['kp'] for record in records[2:]], [5.0] * 6)
+
+    def test_output_is_sorted_unique_and_aligned(self):
+        messy = list(reversed(bins(datetime(2026, 3, 14), 40)))
+        records, _ = build_series([('messy', messy)], self.NOW, history_days=2, forecast_days=7)
+
+        stamps = [record['datetime'] for record in records]
+        self.assertEqual(stamps, sorted(stamps))
+        self.assertEqual(len(stamps), len(set(stamps)))
+        self.assertEqual(validate_series(records), [])
+
+    def test_tolerates_missing_and_empty_sources(self):
+        good = bins(datetime(2026, 3, 15, 12), 8)
+        records, _ = build_series(
+            [('absent', None), ('empty', []), ('good', good)],
+            self.NOW, history_days=2, forecast_days=7,
+        )
+        self.assertEqual(len(records), 8)
+
+    def test_returns_nothing_when_every_source_is_out_of_range(self):
+        records, provenance = build_series(
+            [('old', bins(datetime(2020, 1, 1), 10))],
+            self.NOW, history_days=2, forecast_days=7,
+        )
+        self.assertEqual(records, [])
+        self.assertEqual(provenance, {})
+
+    def test_history_days_zero_starts_at_the_current_bin(self):
+        wide = bins(datetime(2026, 3, 1), 300)
+        records, _ = build_series([('wide', wide)], self.NOW, history_days=0, forecast_days=7)
+
+        self.assertEqual(records[0]['datetime'], '2026-03-15T12:00:00Z')
+
+
+class TestSeriesHorizon(unittest.TestCase):
+
+    def test_measures_from_the_last_bin(self):
+        records = bins(datetime(2026, 3, 15, 12), 9)  # 24h of bins
+        self.assertEqual(
+            series_horizon(records, datetime(2026, 3, 15, 12)), timedelta(hours=24)
+        )
+
+    def test_is_negative_for_a_series_entirely_in_the_past(self):
+        records = bins(datetime(2026, 3, 1), 8)
+        self.assertLess(series_horizon(records, datetime(2026, 3, 15, 12)), timedelta(0))
+
+    def test_empty_series_has_no_horizon(self):
+        self.assertEqual(series_horizon([], datetime(2026, 3, 15)), timedelta(0))
 
 
 class TestIsAligned(unittest.TestCase):

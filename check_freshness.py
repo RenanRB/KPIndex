@@ -19,7 +19,9 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
-from kp_core import parse_timestamp, utcnow
+import noaa
+import search
+from kp_core import fetch_source, parse_timestamp, series_horizon, utcnow
 
 # Thresholds calibrated from the real update cadence of each file, measured
 # over its last 400 commits. kp.json tracks measured Kp and moves every few
@@ -39,6 +41,20 @@ DEFAULT_MAX_AGE_HOURS = 24
 MIN_HORIZON_HOURS = 24
 
 DATA_FILES = ['data/kp.json', 'data/kp_noaa.json']
+
+# Each forecast feed should reach at least this far past now. A feed that
+# falls below its figure has stopped being updated, whatever its HTTP
+# Last-Modified header claims — NOAA re-serves a stale document with a
+# fresh header, so only the content is trustworthy here.
+#
+# These are reported, not enforced: the pipelines are built to fall back to
+# the next source, so one frozen feed is news rather than a failure. The
+# files themselves are what gets to fail the job.
+SOURCE_MIN_HORIZON_HOURS = {
+    'GFZ forecast': 24,
+    'NOAA 3-day': 24,
+    'NOAA 27-day': 120,
+}
 
 
 class FreshnessError(Exception):
@@ -66,8 +82,8 @@ def last_commit_time(path: str) -> datetime:
     return datetime.fromtimestamp(int(stamp), timezone.utc).replace(tzinfo=None)
 
 
-def series_horizon(path: str, now: datetime) -> timedelta:
-    """How far past `now` the last bin in the file reaches."""
+def file_horizon(path: str, now: datetime) -> timedelta:
+    """How far past `now` the last bin in a published file reaches."""
     with open(path) as handle:
         records = json.load(handle)
 
@@ -95,7 +111,7 @@ def check_file(path: str, now=None, commit_time=last_commit_time) -> str:
     age_hours = age.total_seconds() / 3600
     budget = max_age_for(path)
 
-    horizon = series_horizon(path, now)
+    horizon = file_horizon(path, now)
     horizon_hours = horizon.total_seconds() / 3600
 
     summary = (
@@ -118,7 +134,46 @@ def check_file(path: str, now=None, commit_time=last_commit_time) -> str:
     return summary
 
 
-def main(paths: list[str]) -> int:
+def check_sources(now=None) -> list[str]:
+    """Reports which upstream feeds have stopped moving forward.
+
+    Returns a list of human-readable notes, empty when every feed is
+    healthy. This is what spots a frozen feed on day one, rather than
+    waiting for the published files to decay into the alarm threshold.
+    """
+    now = now or utcnow()
+
+    feeds = [
+        ('GFZ forecast', search.fetch_gfz_forecast_csv),
+        ('NOAA 3-day', noaa.fetch_3day_forecast),
+        ('NOAA 27-day', noaa.fetch_27day_outlook),
+    ]
+
+    notes = []
+
+    for name, fetcher in feeds:
+        records = fetch_source(name, fetcher)
+
+        if records is None:
+            notes.append(f"{name} is unreachable")
+            continue
+
+        horizon = series_horizon(records, now)
+        hours = horizon.total_seconds() / 3600
+        budget = SOURCE_MIN_HORIZON_HOURS[name]
+
+        if hours < budget:
+            notes.append(
+                f"{name} only reaches {hours:.1f}h ahead (expected {budget}h) "
+                f"- it looks frozen"
+            )
+        else:
+            print(f"OK  source {name}: reaches {hours:.1f}h ahead")
+
+    return notes
+
+
+def main(paths: list[str], check_upstream: bool = True) -> int:
     paths = paths or DATA_FILES
     now = utcnow()
     failures = []
@@ -129,6 +184,12 @@ def main(paths: list[str]) -> int:
         except (FreshnessError, OSError, ValueError, KeyError) as error:
             print(f"FAIL {error}", file=sys.stderr)
             failures.append(path)
+
+    # Surfaced as GitHub Actions warnings: visible on the run summary without
+    # turning one frozen feed into a daily stream of failure notifications.
+    if check_upstream:
+        for note in check_sources(now):
+            print(f"::warning::{note}")
 
     if failures:
         print(

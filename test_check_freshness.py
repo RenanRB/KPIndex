@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta
 
 import check_freshness
@@ -173,18 +174,11 @@ class TestLastCommitTime(unittest.TestCase):
 class TestMain(unittest.TestCase):
 
     def run_main(self, paths):
+        """Runs the CLI without the upstream probe; tests stay offline."""
         with contextlib.redirect_stdout(io.StringIO()) as out:
             with contextlib.redirect_stderr(io.StringIO()) as err:
-                code = check_freshness.main(paths)
+                code = check_freshness.main(paths, check_upstream=False)
         return code, out.getvalue() + err.getvalue()
-
-    def test_the_committed_data_is_currently_fresh(self):
-        root = os.path.dirname(os.path.abspath(__file__))
-        if not os.path.exists(os.path.join(root, '.git')):
-            self.skipTest('not a git checkout')
-
-        code, _ = self.run_main([os.path.join(root, name) for name in check_freshness.DATA_FILES])
-        self.assertEqual(code, 0)
 
     def test_fails_on_a_missing_file(self):
         code, output = self.run_main(['/nonexistent-kpindex/kp.json'])

@@ -13,8 +13,11 @@ Two files are published, both refreshed hourly by GitHub Actions:
 
 | File | Sources | Coverage |
 | --- | --- | --- |
-| [`data/kp.json`](data/kp.json) | GFZ measured + GFZ forecast + NOAA 27-day | ~2 days of past, ~9 days total |
-| [`data/kp_noaa.json`](data/kp_noaa.json) | NOAA 3-day + NOAA 27-day | ~7 days ahead, forecast only |
+| [`data/kp.json`](data/kp.json) | GFZ measured + GFZ forecast + NOAA 3-day + NOAA 27-day | 2 days of past, 7 days ahead |
+| [`data/kp_noaa.json`](data/kp_noaa.json) | NOAA 3-day + NOAA 27-day | 7 days ahead, forecast only |
+
+Both windows are anchored on the current time, not on the data, so the span is
+the same on every run.
 
 Each file is a chronological JSON array of three-hour bins:
 
@@ -28,11 +31,24 @@ Each file is a chronological JSON array of three-hour bins:
 - `datetime` — UTC, always on a real Kp bin (00, 03, 06, 09, 12, 15, 18, 21).
 - `kp` — always a JSON number in the 0–9 range.
 
-`kp.json` blends measurement with prediction: bins in the past carry observed
-Kp, and a measured value always overrides a forecast for the same bin. The tail
-of both files comes from the NOAA 27-day outlook, which publishes a single
-figure per day — the largest Kp expected — repeated across that day's eight
-bins. **The tail is an upper bound, not an hourly profile.**
+### How a bin is chosen
+
+Several feeds overlap, so each bin is taken from the most trustworthy source
+that offers it:
+
+| Priority | Source | What it gives |
+| --- | --- | --- |
+| 1 | GFZ realtime | Kp already measured — wins outright |
+| 2 | GFZ forecast | modelled per-bin Kp, a few days out |
+| 3 | NOAA 3-day | a real per-bin profile, 3 days out |
+| 4 | NOAA 27-day | one figure per day, fills the tail |
+
+That ordering is what makes the output survive an outage: a feed that freezes
+stops offering bins inside the window and the next source takes over.
+
+The NOAA 27-day outlook publishes a single figure per day — the largest Kp
+expected — repeated across that day's eight bins. **Where the tail comes from
+it, it is an upper bound, not an hourly profile.**
 
 ## Guarantees
 
@@ -42,7 +58,11 @@ wrong. Before any file is written, the whole series must satisfy:
 - every timestamp lands on a real three-hour bin;
 - timestamps are strictly increasing, with no duplicates;
 - every `kp` is a number within 0–9 (nulls and `-1` sentinels are dropped);
-- the series is not suspiciously short.
+- the series is not suspiciously short;
+- the series reaches at least 3 days into the future.
+
+That last rule is deliberate: a series that no longer covers the days ahead is
+worse than the file it would replace, so the run keeps the old one and says so.
 
 If a check fails the run aborts and the previous file is left untouched. The
 same checks run in CI against the committed files, so bad data cannot sit in
@@ -57,8 +77,12 @@ That tolerance would otherwise create a blind spot — a feed down for days
 would leave the files quietly frozen — so a separate job runs four times a day
 and **fails loudly** once the data has genuinely stopped moving. It checks two
 things: how long since each file last changed, and how far beyond now the
-series still reaches. The staleness budgets come from each file's measured
-update cadence, which differs a lot between them:
+series still reaches. It also probes the feeds themselves and flags any that
+have stopped moving forward, which is what catches a frozen upstream on day
+one rather than once the published files have decayed into the threshold.
+
+The staleness budgets come from each file's measured update cadence, which
+differs a lot between them:
 
 | File | Median | Slowest observed | Budget |
 | --- | --- | --- | --- |
@@ -69,7 +93,8 @@ update cadence, which differs a lot between them:
 
 | Path | Purpose |
 | --- | --- |
-| `kp_core.py` | Shared fetching, Kp invariants and atomic writes |
+| `kp_core.py` | Shared fetching, Kp invariants, windowing and atomic writes |
+| `noaa.py` | Parsers for the two NOAA SWPC products |
 | `search.py` | Builds `data/kp.json` (GFZ + NOAA) |
 | `search_noaa.py` | Builds `data/kp_noaa.json` (NOAA only) |
 | `validate_data.py` | Audits published files; used as the CI gate |

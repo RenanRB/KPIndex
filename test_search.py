@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import search
 import support
-from kp_core import DataValidationError, parse_timestamp, validate_series
+from kp_core import DataValidationError, parse_timestamp, series_horizon, validate_series
 
 
 def setUpModule():
@@ -164,7 +164,8 @@ class TestFetchGfzRealtimeJson(unittest.TestCase):
                 with self.assertRaises(DataValidationError, msg=payload):
                     search.fetch_gfz_realtime_json()
 
-    def test_requests_the_configured_window_in_utc(self):
+    def test_requests_enough_history_to_fill_the_window(self):
+        """The request must reach past the window's start, never stop short."""
         captured = {}
 
         def capture(url, **kwargs):
@@ -172,151 +173,12 @@ class TestFetchGfzRealtimeJson(unittest.TestCase):
             return support.FakeResponse('{"datetime": [], "Kp": []}')
 
         with patch('kp_core.requests.get', side_effect=capture):
-            with patch('search.utcnow', return_value=datetime(2026, 3, 15, 12)):
+            with support.patch_now(search, datetime(2026, 3, 15, 12)):
                 search.fetch_gfz_realtime_json()
 
-        self.assertIn('start=2026-03-13', captured['url'])
-        self.assertIn('end=2026-03-15', captured['url'])
-
-
-class TestFetchNoaa27DayOutlook(unittest.TestCase):
-
-    def test_parses_the_real_document(self):
-        with support.patch_http():
-            records = search.fetch_noaa_27day_outlook()
-
-        self.assertEqual(len(records), 27 * 8)
-        self.assertEqual(records[0], {"datetime": "2026-09-14T00:00:00Z", "kp": 4.0})
-        self.assertEqual(records[7]['datetime'], '2026-09-14T21:00:00Z')
-
-    def test_spreads_a_day_across_its_eight_bins(self):
-        text = ":Issued: 2026 Mar 15 1200 UTC\n2026 Mar 16  100  10  3\n"
-        with support.patch_http({'27-day-outlook': text}):
-            records = search.fetch_noaa_27day_outlook()
-
-        self.assertEqual(len(records), 8)
-        self.assertEqual([record['kp'] for record in records], [3.0] * 8)
-        self.assertEqual(records[0]['datetime'], '2026-03-16T00:00:00Z')
-        self.assertEqual(records[-1]['datetime'], '2026-03-16T21:00:00Z')
-
-    def test_kp_is_always_a_float(self):
-        """kp.json used to mix ints from NOAA with floats from GFZ."""
-        text = ":Issued: 2026 Mar 15 1200 UTC\n2026 Mar 16  100  10  3\n"
-        with support.patch_http({'27-day-outlook': text}):
-            records = search.fetch_noaa_27day_outlook()
-
-        for record in records:
-            self.assertIsInstance(record['kp'], float)
-
-    def test_rejects_a_document_without_an_issue_header(self):
-        with support.patch_http({'27-day-outlook': '2026 Mar 16  100  10  3\n'}):
-            with self.assertRaises(DataValidationError):
-                search.fetch_noaa_27day_outlook()
-
-    def test_handles_a_leap_day(self):
-        text = ":Issued: 2028 Feb 28 1200 UTC\n2028 Feb 29  100  10  3\n"
-        with support.patch_http({'27-day-outlook': text}):
-            records = search.fetch_noaa_27day_outlook()
-
-        self.assertEqual(records[0]['datetime'], '2028-02-29T00:00:00Z')
-
-    def test_skips_rows_with_an_unreadable_date(self):
-        text = (
-            ":Issued: 2026 Mar 15 1200 UTC\n"
-            "2026 Xxx 16  100  10  3\n"
-            "2026 Mar 17  100  10  4\n"
-        )
-        with support.patch_http({'27-day-outlook': text}):
-            records = search.fetch_noaa_27day_outlook()
-
-        self.assertEqual(len(records), 8)
-        self.assertEqual(records[0]['datetime'], '2026-03-17T00:00:00Z')
-
-    def test_rejects_a_document_with_no_usable_rows(self):
-        with support.patch_http({'27-day-outlook': ":Issued: 2026 Mar 15 1200 UTC\n# nothing\n"}):
-            with self.assertRaises(DataValidationError):
-                search.fetch_noaa_27day_outlook()
-
-    def test_skips_rows_with_an_unusable_kp(self):
-        text = (
-            ":Issued: 2026 Mar 15 1200 UTC\n"
-            "2026 Mar 16  100  10  3\n"
-            "2026 Mar 17  100  10  bad\n"
-        )
-        with support.patch_http({'27-day-outlook': text}):
-            records = search.fetch_noaa_27day_outlook()
-
-        self.assertEqual(len(records), 8)
-
-
-class TestCombineShortTerm(unittest.TestCase):
-
-    def test_measurements_win_over_forecasts(self):
-        forecast = [
-            {"datetime": "2026-03-15T00:00:00Z", "kp": 1.0},
-            {"datetime": "2026-03-15T03:00:00Z", "kp": 1.5},
-        ]
-        realtime = [{"datetime": "2026-03-15T00:00:00Z", "kp": 7.0}]
-
-        combined = search.combine_short_term(forecast, realtime)
-
-        self.assertEqual(
-            combined,
-            [
-                {"datetime": "2026-03-15T00:00:00Z", "kp": 7.0},
-                {"datetime": "2026-03-15T03:00:00Z", "kp": 1.5},
-            ],
-        )
-
-    def test_result_is_sorted_and_unique(self):
-        forecast = [
-            {"datetime": "2026-03-15T09:00:00Z", "kp": 1.0},
-            {"datetime": "2026-03-15T00:00:00Z", "kp": 2.0},
-            {"datetime": "2026-03-15T09:00:00Z", "kp": 3.0},
-        ]
-        combined = search.combine_short_term(forecast, [])
-
-        stamps = [record['datetime'] for record in combined]
-        self.assertEqual(stamps, sorted(stamps))
-        self.assertEqual(len(stamps), len(set(stamps)))
-
-
-class TestMergeKpData(unittest.TestCase):
-
-    def test_tail_starts_after_the_short_term_series(self):
-        short_term = [
-            {"datetime": "2026-03-15T00:00:00Z", "kp": 1.0},
-            {"datetime": "2026-03-15T03:00:00Z", "kp": 1.0},
-        ]
-        long_term = [
-            {"datetime": "2026-03-14T00:00:00Z", "kp": 9.0},   # before, dropped
-            {"datetime": "2026-03-15T03:00:00Z", "kp": 9.0},   # overlaps, dropped
-            {"datetime": "2026-03-15T06:00:00Z", "kp": 5.0},   # kept
-            {"datetime": "2026-03-30T00:00:00Z", "kp": 9.0},   # past window, dropped
-        ]
-
-        merged = search.merge_kp_data(short_term, long_term)
-
-        self.assertEqual(len(merged), 3)
-        self.assertEqual(merged[-1], {"datetime": "2026-03-15T06:00:00Z", "kp": 5.0})
-
-    def test_window_is_bounded_from_the_first_bin(self):
-        short_term = [{"datetime": "2026-03-15T00:00:00Z", "kp": 1.0}]
-        limit = parse_timestamp("2026-03-15T00:00:00Z") + timedelta(days=search.SERIES_WINDOW_DAYS)
-
-        long_term = [
-            {"datetime": (limit - timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%SZ'), "kp": 2.0},
-            {"datetime": limit.strftime('%Y-%m-%dT%H:%M:%SZ'), "kp": 3.0},
-        ]
-
-        merged = search.merge_kp_data(short_term, long_term)
-
-        self.assertEqual(len(merged), 2)
-        self.assertEqual(merged[-1]['kp'], 2.0)
-
-    def test_empty_short_term_falls_back_to_the_tail(self):
-        long_term = [{"datetime": "2026-03-15T00:00:00Z", "kp": 1.0}]
-        self.assertEqual(search.merge_kp_data([], long_term), long_term)
+        requested = parse_timestamp(captured['url'].split('start=')[1][:10] + 'T00:00:00Z')
+        window_start = datetime(2026, 3, 15, 12) - timedelta(days=search.HISTORY_DAYS)
+        self.assertLessEqual(requested, window_start)
 
 
 class TestPipeline(unittest.TestCase):
@@ -328,22 +190,45 @@ class TestPipeline(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_writes_a_valid_series_from_the_real_documents(self):
-        with support.patch_http():
-            self.assertTrue(search.get_kp_pipeline())
-
+    def load(self):
         with open(self.output) as handle:
-            records = json.load(handle)
+            return json.load(handle)
+
+    def run_pipeline(self, overrides=None, now=None):
+        with support.patch_http(overrides):
+            with support.patch_now(search, now):
+                return search.get_kp_pipeline()
+
+    def test_writes_a_valid_series_from_the_real_documents(self):
+        self.assertTrue(self.run_pipeline())
+        records = self.load()
 
         self.assertEqual(validate_series(records), [])
-        self.assertEqual(records[0]['datetime'], '2026-09-14T00:00:00Z')
+        self.assertTrue(records)
+
+    def test_covers_the_configured_window(self):
+        self.run_pipeline()
+        records = self.load()
+
+        first = parse_timestamp(records[0]['datetime'])
+        horizon = series_horizon(records, support.FIXTURE_NOW)
+
+        self.assertEqual(support.FIXTURE_NOW - first, timedelta(days=search.HISTORY_DAYS))
+        self.assertEqual(horizon, timedelta(days=search.FORECAST_DAYS))
+
+    def test_series_is_contiguous(self):
+        """No gaps: every three-hour bin in the window must be present."""
+        self.run_pipeline()
+        records = self.load()
+
+        self.assertEqual(validate_series(records), [])
+        moments = [parse_timestamp(record['datetime']) for record in records]
+        for earlier, later in zip(moments, moments[1:]):
+            self.assertEqual(later - earlier, timedelta(hours=3))
 
     def test_output_is_chronological_unique_and_in_range(self):
-        with support.patch_http():
-            search.get_kp_pipeline()
-
-        with open(self.output) as handle:
-            records = json.load(handle)
+        self.run_pipeline()
+        records = self.load()
 
         stamps = [record['datetime'] for record in records]
         self.assertEqual(stamps, sorted(stamps))
@@ -352,47 +237,96 @@ class TestPipeline(unittest.TestCase):
             self.assertIsInstance(record['kp'], float)
             self.assertTrue(0.0 <= record['kp'] <= 9.0)
 
-    def test_measured_history_precedes_the_forecast(self):
-        """The series must start in the past and reach into the future."""
+    def test_measured_kp_wins_over_every_forecast(self):
+        """A bin GFZ has measured must carry the measurement."""
+        self.run_pipeline()
+        records = {record['datetime']: record['kp'] for record in self.load()}
+
         with support.patch_http():
-            search.get_kp_pipeline()
+            measured = search.fetch_gfz_realtime_json()
 
-        with open(self.output) as handle:
-            records = json.load(handle)
+        overlapping = [m for m in measured if m['datetime'] in records]
+        self.assertTrue(overlapping, 'fixtures should overlap the window')
+        for record in overlapping:
+            self.assertEqual(records[record['datetime']], record['kp'])
 
-        first = parse_timestamp(records[0]['datetime'])
-        last = parse_timestamp(records[-1]['datetime'])
-        self.assertLess(first, last)
-        self.assertGreater(last - first, timedelta(days=5))
+    def test_a_frozen_gfz_forecast_no_longer_costs_us_the_future(self):
+        """Regression for the October 2026 outage.
 
-    def test_keeps_previous_data_when_a_source_is_down(self):
-        with patch.object(search, 'fetch_gfz_forecast_csv', side_effect=OSError("down")):
-            with support.patch_http():
+        GFZ kept serving a forecast file that had not changed in eight days.
+        Because the window was anchored on the earliest record, that stale
+        feed dragged the window back and the NOAA tail was filtered out: the
+        published series kept its past and lost its entire forecast.
+        """
+        stale_day = support.FIXTURE_NOW - timedelta(days=8)
+        rows = ["Time (UTC),median"]
+        for index in range(25):
+            moment = stale_day + timedelta(hours=3 * index)
+            rows.append(f"{moment.strftime('%d-%m-%Y %H:%M')},1.0")
+        stale_csv = "\n".join(rows) + "\n"
+
+        self.assertTrue(self.run_pipeline({'spaceweather': stale_csv}))
+        records = self.load()
+
+        horizon = series_horizon(records, support.FIXTURE_NOW)
+        self.assertEqual(horizon, timedelta(days=search.FORECAST_DAYS))
+        self.assertEqual(validate_series(records), [])
+
+        # Nothing from the stale file may appear in the published window.
+        earliest = parse_timestamp(records[0]['datetime'])
+        self.assertGreater(earliest, stale_day + timedelta(days=1))
+
+    def test_survives_the_loss_of_any_single_source(self):
+        """Each feed can vanish and still leave a publishable series."""
+        feeds = [
+            'fetch_gfz_realtime_json',
+            'fetch_gfz_forecast_csv',
+        ]
+        for name in feeds:
+            with self.subTest(source=name):
+                with patch.object(search, name, side_effect=OSError("down")):
+                    self.assertTrue(self.run_pipeline(), f"{name} down broke the run")
+                self.assertEqual(validate_series(self.load()), [])
+
+    def test_survives_the_loss_of_the_gfz_entirely(self):
+        with patch.object(search, 'fetch_gfz_realtime_json', side_effect=OSError("down")):
+            with patch.object(search, 'fetch_gfz_forecast_csv', side_effect=OSError("down")):
+                self.assertTrue(self.run_pipeline())
+
+        self.assertEqual(validate_series(self.load()), [])
+
+    def test_keeps_previous_data_when_every_source_is_down(self):
+        with patch('kp_core.requests.get', side_effect=OSError("down")):
+            with support.patch_now(search):
                 self.assertFalse(search.get_kp_pipeline())
 
         self.assertFalse(os.path.exists(self.output))
 
-    def test_never_overwrites_good_data_with_a_partial_run(self):
-        with support.patch_http():
-            search.get_kp_pipeline()
+    def test_refuses_a_series_that_barely_reaches_the_future(self):
+        """Too little forecast is worse than the file it would replace."""
+        with patch.object(search, 'FORECAST_DAYS', 1):
+            self.assertFalse(self.run_pipeline())
+
+        self.assertFalse(os.path.exists(self.output))
+
+    def test_never_overwrites_good_data_with_an_unpublishable_run(self):
+        self.assertTrue(self.run_pipeline())
         with open(self.output) as handle:
             before = handle.read()
 
-        with patch.object(search, 'fetch_noaa_27day_outlook', side_effect=OSError("down")):
-            with support.patch_http():
+        with patch('kp_core.requests.get', side_effect=OSError("down")):
+            with support.patch_now(search):
                 self.assertFalse(search.get_kp_pipeline())
 
         with open(self.output) as handle:
             self.assertEqual(handle.read(), before)
 
     def test_refuses_to_publish_a_corrupt_series(self):
-        """Validation failure must raise, not quietly write bad data."""
-        corrupt = [{"datetime": "2026-03-15T07:00:00Z", "kp": 1.0}] * 8
+        corrupt = ([{"datetime": "2026-09-16T07:00:00Z", "kp": 1.0}] * 8, {})
 
-        with patch.object(search, 'merge_kp_data', return_value=corrupt):
-            with support.patch_http():
-                with self.assertRaises(DataValidationError):
-                    search.get_kp_pipeline()
+        with patch('search.build_series', return_value=corrupt):
+            with self.assertRaises(DataValidationError):
+                self.run_pipeline()
 
         self.assertFalse(os.path.exists(self.output))
 

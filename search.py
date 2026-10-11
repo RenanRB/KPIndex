@@ -1,22 +1,31 @@
 """Builds the combined Kp index series published in data/kp.json.
 
-Three feeds are stitched together, in increasing order of uncertainty:
+The series covers a window anchored on the clock: HISTORY_DAYS of past and
+FORECAST_DAYS of future. Four feeds compete to fill it, and each bin is
+taken from the most trustworthy source that offers it:
 
-  1. GFZ realtime   - Kp already measured, for the last two days.
-  2. GFZ forecast   - modelled Kp for roughly the next three days.
-  3. NOAA 27-day    - a single daily figure, used to extend the tail.
+  1. GFZ realtime   - Kp already measured. Wins outright.
+  2. GFZ forecast   - modelled per-bin Kp, a few days ahead.
+  3. NOAA 3-day     - a real per-bin profile, three days ahead.
+  4. NOAA 27-day    - one figure per day, an upper bound, fills the tail.
 
-Measurements always win over forecasts for the same bin. The result is
-validated as a whole before anything is written, and a run that cannot
-produce a trustworthy series writes nothing at all.
+That ordering is what makes the output resilient: when a feed freezes, as
+the GFZ forecast file did for eight days in October 2026, it stops offering
+bins in range and the next source takes over instead of the series quietly
+losing its future.
+
+The result is validated as a whole before anything is written, and a run
+that cannot produce a trustworthy series writes nothing at all.
 """
 
 import csv
 import logging
 from datetime import datetime, timedelta
 
+import noaa
 from kp_core import (
     DataValidationError,
+    build_series,
     clean_kp,
     fetch_json,
     fetch_lines,
@@ -24,6 +33,7 @@ from kp_core import (
     format_timestamp,
     is_aligned,
     parse_timestamp,
+    series_horizon,
     snap_to_bin,
     utcnow,
     validate_series,
@@ -33,22 +43,27 @@ from kp_core import (
 # --- Configuration Constants ---
 GFZ_FORECAST_URL = 'https://spaceweather.gfz-potsdam.de/fileadmin/Kp-Forecast/CSV/kp_product_file_FORECAST_PAGER_SWIFT_LAST.csv'
 GFZ_REALTIME_URL_TEMPLATE = 'https://kp.gfz-potsdam.de/app/json/?start={start}T00:00:00Z&end={end}T23%3A59%3A59Z&index=Kp#kpdatadownload-143'
-NOAA_OUTLOOK_URL = 'https://services.swpc.noaa.gov/text/27-day-outlook.txt'
 OUTPUT_FILE = 'new_kp.json'
 
-# Strings the genuine documents contain, used to reject error pages served
-# with a 200 status before they reach a parser.
+# A string the genuine document contains, used to reject an error page
+# served with a 200 status before it reaches the parser.
 GFZ_FORECAST_MARKER = 'Time (UTC)'
-NOAA_OUTLOOK_MARKER = ':Issued:'
 
 # The forecast publishes several quantiles per bin; we track the median.
 FORECAST_VALUE_COLUMN = 'median'
 FORECAST_TIME_FORMAT = '%d-%m-%Y %H:%M'
 
-# How many days of realtime history to request, and how far past the start of
-# the series the NOAA tail is allowed to reach.
-REALTIME_LOOKBACK_DAYS = 2
-SERIES_WINDOW_DAYS = 9
+# The published window, both ends anchored on the current time.
+HISTORY_DAYS = 2
+FORECAST_DAYS = 7
+
+# Below this much future the series is not worth publishing over the
+# previous one; the run keeps the old file and says so.
+MIN_FORECAST_DAYS = 3
+
+# How many days of realtime history to request. One extra day is asked for
+# so the window's start is never clipped by the request boundary.
+REALTIME_LOOKBACK_DAYS = HISTORY_DAYS + 1
 
 
 def fetch_gfz_forecast_csv() -> list[dict]:
@@ -159,137 +174,77 @@ def fetch_gfz_realtime_json() -> list[dict]:
     return result
 
 
-def fetch_noaa_27day_outlook() -> list[dict]:
-    """Fetches the NOAA 27-day outlook and spreads each day across its bins.
+def report_coverage(provenance: dict) -> None:
+    """Logs how many bins each source ended up contributing."""
+    counts = {}
+    for name in provenance.values():
+        counts[name] = counts.get(name, 0) + 1
 
-    NOAA publishes one figure per day, the largest Kp expected that day. It
-    is repeated across all eight bins because the consumer expects a uniform
-    three-hour series; the tail is therefore an upper bound, not a profile.
-    """
-    lines = fetch_lines(NOAA_OUTLOOK_URL, expected_marker=NOAA_OUTLOOK_MARKER)
-
-    issued = False
-    kp_data = []
-
-    for line in lines:
-        parts = line.split()
-
-        if line.startswith(':Issued:'):
-            issued = True
-            continue
-
-        # Data rows look like: 2026 Sep 16  95  20  5
-        if not issued or len(parts) != 6 or not parts[0].isdigit():
-            continue
-
-        try:
-            day = datetime.strptime(f"{parts[0]} {parts[1]} {parts[2]}", '%Y %b %d')
-        except ValueError:
-            logging.warning("NOAA outlook row has an unreadable date: %r", line)
-            continue
-
-        kp = clean_kp(parts[5])
-        if kp is None:
-            logging.warning("NOAA outlook row has an unusable Kp: %r", line)
-            continue
-
-        for bin_index in range(8):
-            kp_data.append({
-                "datetime": format_timestamp(day + timedelta(hours=3 * bin_index)),
-                "kp": kp,
-            })
-
-    if not issued:
-        raise DataValidationError("NOAA outlook has no ':Issued:' header")
-    if not kp_data:
-        raise DataValidationError("NOAA outlook produced no usable rows")
-
-    return kp_data
-
-
-def merge_kp_data(short_term_data: list[dict], long_term_data: list[dict]) -> list[dict]:
-    """Appends the long-term tail to the short-term series without overlap.
-
-    The tail starts after the last short-term bin and stops SERIES_WINDOW_DAYS
-    after the first one, which bounds how far ahead the coarse daily figures
-    are allowed to reach.
-    """
-    if not short_term_data:
-        return long_term_data
-
-    moments = [parse_timestamp(entry["datetime"]) for entry in short_term_data]
-    first_date = min(moments)
-    last_date = max(moments)
-    limit_date = first_date + timedelta(days=SERIES_WINDOW_DAYS)
-
-    long_term_filtered = [
-        entry for entry in long_term_data
-        if last_date < parse_timestamp(entry["datetime"]) < limit_date
-    ]
-
-    return short_term_data + long_term_filtered
-
-
-def combine_short_term(forecast: list[dict], realtime: list[dict]) -> list[dict]:
-    """Overlays measured Kp on top of the forecast for the same bins."""
-    short_term = {entry['datetime']: entry for entry in forecast}
-
-    if len(short_term) != len(forecast):
-        logging.warning(
-            "GFZ forecast contained %d duplicate bin(s); keeping the last of each",
-            len(forecast) - len(short_term)
-        )
-
-    overridden = 0
-    for entry in realtime:
-        if entry['datetime'] in short_term:
-            overridden += 1
-        short_term[entry['datetime']] = entry
-
-    if overridden:
-        logging.info("Measured Kp replaced the forecast for %d bin(s)", overridden)
-
-    return sorted(short_term.values(), key=lambda entry: entry['datetime'])
+    for name, count in sorted(counts.items(), key=lambda item: -item[1]):
+        logging.info("  %-18s %3d bin(s)", name, count)
 
 
 def get_kp_pipeline() -> bool:
     """Runs the full pipeline.
 
-    Returns True when a validated file was written, and False when a source
-    was unavailable and the previous data should be kept. Raises
+    Returns True when a validated file was written, and False when the data
+    on offer cannot produce a series worth publishing. Raises
     DataValidationError when the data was fetched but cannot be trusted.
     """
     logging.info("Starting Kp fetch pipeline...")
+    now = utcnow()
 
-    gfz_forecast = fetch_source('GFZ forecast', fetch_gfz_forecast_csv)
-    gfz_realtime = fetch_source('GFZ realtime', fetch_gfz_realtime_json)
-    noaa_outlook = fetch_source('NOAA 27-day outlook', fetch_noaa_27day_outlook)
-
-    # Each source covers a different slice of the timeline, so a partial run
-    # would silently publish a truncated series over a complete one.
-    missing = [
-        name for name, data in (
-            ('GFZ forecast', gfz_forecast),
-            ('GFZ realtime', gfz_realtime),
-            ('NOAA 27-day outlook', noaa_outlook),
-        ) if data is None
+    # Ordered by how much we trust them; build_series resolves the overlaps.
+    sources = [
+        ('GFZ realtime', fetch_source('GFZ realtime', fetch_gfz_realtime_json)),
+        ('GFZ forecast', fetch_source('GFZ forecast', fetch_gfz_forecast_csv)),
+        ('NOAA 3-day', fetch_source('NOAA 3-day', noaa.fetch_3day_forecast)),
+        ('NOAA 27-day', fetch_source('NOAA 27-day', noaa.fetch_27day_outlook)),
     ]
-    if missing:
-        logging.warning("Skipping update, unavailable source(s): %s", ', '.join(missing))
+
+    available = [(name, records) for name, records in sources if records is not None]
+    if not available:
+        logging.error("Every source is unavailable; keeping the previous data.")
         return False
 
-    short_term_merged = combine_short_term(gfz_forecast, gfz_realtime)
-    final_result = merge_kp_data(short_term_merged, noaa_outlook)
+    unavailable = [name for name, records in sources if records is None]
+    if unavailable:
+        logging.warning("Unavailable source(s): %s", ', '.join(unavailable))
 
+    final_result, provenance = build_series(
+        available, now, history_days=HISTORY_DAYS, forecast_days=FORECAST_DAYS
+    )
+
+    if not final_result:
+        logging.error("No source covered the publishable window; keeping the previous data.")
+        return False
+
+    report_coverage(provenance)
+
+    # Integrity first: corrupt data is a defect that must be seen, so it
+    # raises. Only then is the series judged on whether it is useful, which
+    # a mere upstream outage can make it not be.
     for warning in validate_series(final_result):
         logging.warning("Series warning: %s", warning)
+
+    # A series that barely reaches past now is worse than the file it would
+    # replace, so it is refused rather than published.
+    horizon = series_horizon(final_result, now)
+    if horizon < timedelta(days=MIN_FORECAST_DAYS):
+        logging.error(
+            "Series only reaches %.1fh ahead, under the %d-day minimum. "
+            "Keeping the previous data.",
+            horizon.total_seconds() / 3600, MIN_FORECAST_DAYS
+        )
+        return False
 
     write_json_atomic(OUTPUT_FILE, final_result)
 
     logging.info(
-        "Successfully saved %d Kp records to %s (%s to %s)",
+        "Successfully saved %d Kp records to %s (%s to %s, %.1f days ahead)",
         len(final_result), OUTPUT_FILE,
-        final_result[0]['datetime'], final_result[-1]['datetime']
+        final_result[0]['datetime'], final_result[-1]['datetime'],
+        horizon.total_seconds() / 86400
     )
     return True
 
@@ -298,5 +253,6 @@ if __name__ == '__main__':  # pragma: no cover
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     if not get_kp_pipeline():
         # Exit successfully so a transient upstream outage is not reported as
-        # a broken build, but flag it on the GitHub Actions summary.
-        print("::warning::Kp sources unavailable, data/kp.json kept unchanged.")
+        # a broken build. The scheduled freshness check is what escalates a
+        # problem that persists, so this cannot go unnoticed for long.
+        print("::warning::Could not build a publishable Kp series, data/kp.json kept unchanged.")
