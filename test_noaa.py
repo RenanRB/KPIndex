@@ -101,8 +101,8 @@ class TestFetch3DayForecast(unittest.TestCase):
             records = noaa.fetch_3day_forecast()
 
         self.assertEqual(len(records), 24)
-        self.assertEqual(records[0], {"datetime": "2026-09-16T00:00:00Z", "kp": 3.67})
-        self.assertEqual(records[-1], {"datetime": "2026-09-18T21:00:00Z", "kp": 3.0})
+        self.assertEqual(records[0], {"datetime": "2026-10-11T00:00:00Z", "kp": 5.67})
+        self.assertEqual(records[-1]['datetime'], '2026-10-13T21:00:00Z')
 
     def test_each_row_is_anchored_on_its_own_label(self):
         """Rows out of order must still land on the right bin."""
@@ -195,8 +195,8 @@ class TestFetch27DayOutlook(unittest.TestCase):
             records = noaa.fetch_27day_outlook()
 
         self.assertEqual(len(records), 27 * 8)
-        self.assertEqual(records[0], {"datetime": "2026-09-14T00:00:00Z", "kp": 4.0})
-        self.assertEqual(records[7]['datetime'], '2026-09-14T21:00:00Z')
+        self.assertEqual(records[0], {"datetime": "2026-10-05T00:00:00Z", "kp": 5.0})
+        self.assertEqual(records[7]['datetime'], '2026-10-05T21:00:00Z')
 
     def test_spreads_a_day_across_its_eight_bins(self):
         text = ":Issued: 2026 Mar 15 1200 UTC\n2026 Mar 16  100  10  3\n"

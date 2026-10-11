@@ -39,7 +39,7 @@ that offers it:
 | Priority | Source | What it gives |
 | --- | --- | --- |
 | 1 | GFZ realtime | Kp already measured — wins outright |
-| 2 | GFZ forecast | modelled per-bin Kp, a few days out |
+| 2 | GFZ forecast | modelled per-bin Kp, 3 days out |
 | 3 | NOAA 3-day | a real per-bin profile, 3 days out |
 | 4 | NOAA 27-day | one figure per day, fills the tail |
 
@@ -118,8 +118,18 @@ Tests never touch the network: they run against the captured documents in
 
 ## Sources
 
-- [GFZ Potsdam](https://spaceweather.gfz-potsdam.de/) — measured Kp and short-term forecast (CC BY 4.0)
+- [GFZ](https://spaceweather.gfz.de/) — measured Kp, and the
+  [Hpo forecast](https://spaceweather.gfz.de/products-data/observatory-based-geomagnetic-forecasts/forecasting-global-kp-and-hpo-indices)
+  consensus of three models (CC BY 4.0)
 - [NOAA SWPC](https://www.swpc.noaa.gov/) — 3-day geomagnetic forecast and 27-day outlook
+
+> **Retired source.** Until October 2026 the GFZ forecast came from the
+> PAGER/SWIFT CSV (`kp_product_file_FORECAST_PAGER_SWIFT_LAST.csv`). That file
+> silently stopped updating on 3 Oct 2026 while still answering HTTP 200 — on
+> both the `gfz-potsdam.de` and `gfz.de` hostnames — so it was replaced by the
+> Hpo forecast rather than merely re-pointed. Note the Hpo URL carries a
+> version segment (`v0102`); if GFZ bumps it, the freshness check will report
+> the feed as frozen.
 
 ## Licence
 

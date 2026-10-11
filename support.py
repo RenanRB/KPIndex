@@ -13,20 +13,22 @@ from unittest.mock import patch
 
 FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
 
-# The captures were taken mid-September 2026. The pipelines publish a window
-# anchored on the current time, so any test that runs one has to pin the
-# clock inside the period the fixtures cover, or the window would fall
+# The captures were all taken at 2026-10-11T13:03Z. The pipelines publish a
+# window anchored on the current time, so any test that runs one has to pin
+# the clock inside the period the fixtures cover, or the window would fall
 # entirely outside the data.
 #
-#   gfz_realtime.json  14 Sep 00:00 - 15 Sep 21:00  (measured)
-#   gfz_forecast.csv   16 Sep 00:00 - 19 Sep 00:00
-#   noaa_3day.txt      16 Sep - 18 Sep
-#   noaa_27day.txt     14 Sep - 10 Oct
-FIXTURE_NOW = datetime(2026, 9, 16, 12, 0)
+#   gfz_realtime.json   8 Oct 00:00 - 11 Oct 12:00  (measured)
+#   gfz_forecast.json  11 Oct 09:00 - 14 Oct 09:00
+#   noaa_3day.txt      11 Oct - 13 Oct       (issued 10 Oct)
+#   noaa_27day.txt      5 Oct - 31 Oct       (issued  5 Oct)
+#
+# Together they cover the 2-days-back to 7-days-ahead window around:
+FIXTURE_NOW = datetime(2026, 10, 11, 12, 0)
 
 # Matched against the requested URL, longest-lived identifiers first.
 FIXTURES = [
-    ('spaceweather.gfz-potsdam.de', 'gfz_forecast.csv'),
+    ('HpoForecast', 'gfz_forecast.json'),
     ('kp.gfz-potsdam.de', 'gfz_realtime.json'),
     ('27-day-outlook', 'noaa_27day.txt'),
     ('3-day-geomag', 'noaa_3day.txt'),

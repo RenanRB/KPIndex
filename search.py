@@ -5,22 +5,21 @@ FORECAST_DAYS of future. Four feeds compete to fill it, and each bin is
 taken from the most trustworthy source that offers it:
 
   1. GFZ realtime   - Kp already measured. Wins outright.
-  2. GFZ forecast   - modelled per-bin Kp, a few days ahead.
+  2. GFZ forecast   - modelled per-bin Kp, three days ahead.
   3. NOAA 3-day     - a real per-bin profile, three days ahead.
   4. NOAA 27-day    - one figure per day, an upper bound, fills the tail.
 
 That ordering is what makes the output resilient: when a feed freezes, as
-the GFZ forecast file did for eight days in October 2026, it stops offering
-bins in range and the next source takes over instead of the series quietly
-losing its future.
+GFZ's retired PAGER/SWIFT file did for eight days in October 2026, it stops
+offering bins in range and the next source takes over instead of the series
+quietly losing its future.
 
 The result is validated as a whole before anything is written, and a run
 that cannot produce a trustworthy series writes nothing at all.
 """
 
-import csv
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import noaa
 from kp_core import (
@@ -28,7 +27,6 @@ from kp_core import (
     build_series,
     clean_kp,
     fetch_json,
-    fetch_lines,
     fetch_source,
     format_timestamp,
     is_aligned,
@@ -41,17 +39,22 @@ from kp_core import (
 )
 
 # --- Configuration Constants ---
-GFZ_FORECAST_URL = 'https://spaceweather.gfz-potsdam.de/fileadmin/Kp-Forecast/CSV/kp_product_file_FORECAST_PAGER_SWIFT_LAST.csv'
+# GFZ's Hpo forecast, the successor to the PAGER/SWIFT CSV this project used
+# until October 2026. That older product silently stopped updating on 3 Oct
+# 2026 while still answering 200, on both the gfz-potsdam.de and gfz.de
+# hostnames, so it was retired here rather than merely re-pointed.
+# Listed at: spaceweather.gfz.de/products-data/observatory-based-geomagnetic-
+# forecasts/forecasting-global-kp-and-hpo-indices
+GFZ_FORECAST_URL = 'https://isdc-data.gfz.de/geomagnetism/HpoForecast/v0102/output/Hpo/json/hpo_forecast_mean_bars_Kp.json'
 GFZ_REALTIME_URL_TEMPLATE = 'https://kp.gfz-potsdam.de/app/json/?start={start}T00:00:00Z&end={end}T23%3A59%3A59Z&index=Kp#kpdatadownload-143'
 OUTPUT_FILE = 'new_kp.json'
 
-# A string the genuine document contains, used to reject an error page
-# served with a 200 status before it reaches the parser.
-GFZ_FORECAST_MARKER = 'Time (UTC)'
-
-# The forecast publishes several quantiles per bin; we track the median.
-FORECAST_VALUE_COLUMN = 'median'
-FORECAST_TIME_FORMAT = '%d-%m-%Y %H:%M'
+# The document holds a consensus of three models as {"MEDIAN": {...},
+# "MAX": {...}}. MEDIAN is the central estimate and the direct equivalent of
+# the 'median' column the retired CSV provided; MAX is the pessimistic bound.
+# The per-model files alongside it disagree sharply with each other, so the
+# consensus is what we publish.
+GFZ_FORECAST_KEY = 'MEDIAN'
 
 # The published window, both ends anchored on the current time.
 HISTORY_DAYS = 2
@@ -66,48 +69,37 @@ MIN_FORECAST_DAYS = 3
 REALTIME_LOOKBACK_DAYS = HISTORY_DAYS + 1
 
 
-def fetch_gfz_forecast_csv() -> list[dict]:
-    """Fetches the short-term GFZ forecast, keeping the median Kp per bin."""
-    lines = fetch_lines(GFZ_FORECAST_URL, expected_marker=GFZ_FORECAST_MARKER)
+def fetch_gfz_forecast() -> list[dict]:
+    """Fetches the GFZ Hpo forecast, keeping the consensus Kp per bin."""
+    data = fetch_json(GFZ_FORECAST_URL)
 
-    rows = csv.reader(lines)
-    try:
-        header = next(rows)
-    except StopIteration:
-        raise DataValidationError("GFZ forecast CSV is empty")
-
-    # Resolved by name so a reordered or extended CSV cannot silently shift
-    # us onto the wrong quantile.
-    try:
-        value_column = [column.strip() for column in header].index(FORECAST_VALUE_COLUMN)
-    except ValueError:
+    if not isinstance(data, dict):
         raise DataValidationError(
-            f"GFZ forecast CSV has no {FORECAST_VALUE_COLUMN!r} column. Header: {header}"
+            f"GFZ forecast returned {type(data).__name__}, expected an object"
         )
+
+    # Resolved by name so a reshaped document cannot silently shift us onto
+    # the pessimistic bound, which would overstate activity everywhere.
+    series = data.get(GFZ_FORECAST_KEY)
+    if not isinstance(series, dict):
+        raise DataValidationError(
+            f"GFZ forecast has no {GFZ_FORECAST_KEY!r} object. Keys: {sorted(data)}"
+        )
+    if not series:
+        raise DataValidationError(f"GFZ forecast {GFZ_FORECAST_KEY!r} object is empty")
 
     forecast_list = []
 
-    for position, row in enumerate(rows, start=2):
-        if not row or len(row) <= value_column:
-            continue
-
-        try:
-            moment = datetime.strptime(row[0].strip(), FORECAST_TIME_FORMAT)
-        except ValueError:
-            logging.warning("GFZ forecast line %d has an unreadable time: %r", position, row[0])
-            continue
-
-        kp = clean_kp(row[value_column])
+    for raw_moment, raw_kp in series.items():
+        kp = clean_kp(raw_kp)
         if kp is None:
-            logging.warning(
-                "GFZ forecast line %d has an unusable Kp: %r", position, row[value_column]
-            )
+            logging.warning("GFZ forecast bin %s has an unusable Kp: %r", raw_moment, raw_kp)
             continue
 
+        moment = parse_timestamp(raw_moment)
         if not is_aligned(moment):
             logging.warning(
-                "GFZ forecast line %d is off-grid (%s); snapping to the nearest bin",
-                position, moment
+                "GFZ forecast bin %s is off-grid; snapping to the nearest bin", raw_moment
             )
 
         forecast_list.append({
@@ -116,9 +108,10 @@ def fetch_gfz_forecast_csv() -> list[dict]:
         })
 
     if not forecast_list:
-        raise DataValidationError("GFZ forecast CSV produced no usable rows")
+        raise DataValidationError("GFZ forecast produced no usable bins")
 
-    return forecast_list
+    # The document is a JSON object, whose order is not guaranteed.
+    return sorted(forecast_list, key=lambda entry: entry['datetime'])
 
 
 def fetch_gfz_realtime_json() -> list[dict]:
@@ -197,7 +190,7 @@ def get_kp_pipeline() -> bool:
     # Ordered by how much we trust them; build_series resolves the overlaps.
     sources = [
         ('GFZ realtime', fetch_source('GFZ realtime', fetch_gfz_realtime_json)),
-        ('GFZ forecast', fetch_source('GFZ forecast', fetch_gfz_forecast_csv)),
+        ('GFZ forecast', fetch_source('GFZ forecast', fetch_gfz_forecast)),
         ('NOAA 3-day', fetch_source('NOAA 3-day', noaa.fetch_3day_forecast)),
         ('NOAA 27-day', fetch_source('NOAA 27-day', noaa.fetch_27day_outlook)),
     ]

@@ -16,98 +16,102 @@ def setUpModule():
     support.silence_logging()
 
 
-class TestFetchGfzForecastCsv(unittest.TestCase):
+class TestFetchGfzForecast(unittest.TestCase):
 
     def test_parses_the_real_document(self):
         with support.patch_http():
-            records = search.fetch_gfz_forecast_csv()
+            records = support_records = search.fetch_gfz_forecast()
 
-        self.assertTrue(records)
-        self.assertEqual(records[0]['datetime'], '2026-09-16T00:00:00Z')
-        self.assertAlmostEqual(records[0]['kp'], 3.333333)
-        for record in records:
+        self.assertEqual(len(records), 25)
+        self.assertEqual(records[0], {"datetime": "2026-10-11T09:00:00Z", "kp": 2.0})
+        self.assertEqual(records[-1]['datetime'], '2026-10-14T09:00:00Z')
+        for record in support_records:
             self.assertTrue(0 <= record['kp'] <= 9)
 
-    def test_reads_the_median_column_by_name(self):
-        """A reordered CSV must not silently shift us onto another quantile."""
-        csv = (
-            "Time (UTC),median,minimum,maximum\n"
-            "15-03-2026 00:00,4.0,1.0,9.0\n"
-            "15-03-2026 03:00,5.0,1.0,9.0\n"
-        )
-        with support.patch_http({'spaceweather': csv}):
-            records = search.fetch_gfz_forecast_csv()
+    def test_reads_the_consensus_key_by_name(self):
+        """MAX is the pessimistic bound; picking it would overstate activity."""
+        payload = json.dumps({
+            "MEDIAN": {"2026-10-11T09:00:00.000": 2.0},
+            "MAX": {"2026-10-11T09:00:00.000": 8.0},
+        })
+        with support.patch_http({'HpoForecast': payload}):
+            records = search.fetch_gfz_forecast()
 
-        self.assertEqual([record['kp'] for record in records], [4.0, 5.0])
+        self.assertEqual(records, [{"datetime": "2026-10-11T09:00:00Z", "kp": 2.0}])
 
-    def test_rejects_a_csv_without_a_median_column(self):
-        csv = "Time (UTC),minimum,maximum\n15-03-2026 00:00,1.0,9.0\n"
-        with support.patch_http({'spaceweather': csv}):
+    def test_rejects_a_document_without_the_consensus_key(self):
+        payload = json.dumps({"MAX": {"2026-10-11T09:00:00.000": 8.0}})
+        with support.patch_http({'HpoForecast': payload}):
             with self.assertRaises(DataValidationError) as caught:
-                search.fetch_gfz_forecast_csv()
+                search.fetch_gfz_forecast()
 
-        self.assertIn('median', str(caught.exception))
+        self.assertIn('MEDIAN', str(caught.exception))
+
+    def test_rejects_an_empty_consensus(self):
+        with support.patch_http({'HpoForecast': json.dumps({"MEDIAN": {}})}):
+            with self.assertRaises(DataValidationError):
+                search.fetch_gfz_forecast()
 
     def test_rejects_an_error_page(self):
-        with support.patch_http({'spaceweather': '<html>502 Bad Gateway</html>'}):
+        with support.patch_http({'HpoForecast': '<html>502 Bad Gateway</html>'}):
             with self.assertRaises(DataValidationError):
-                search.fetch_gfz_forecast_csv()
+                search.fetch_gfz_forecast()
 
-    def test_skips_unusable_rows_but_keeps_the_good_ones(self):
-        csv = (
-            "Time (UTC),minimum,q,median\n"
-            "15-03-2026 00:00,x,x,3.0\n"
-            "not-a-date,x,x,4.0\n"
-            "15-03-2026 06:00,x,x,-1\n"
-            "15-03-2026 09:00,x,x,99\n"
-            "15-03-2026 12:00,x,x,5.0\n"
-            "\n"
-        )
-        with support.patch_http({'spaceweather': csv}):
-            records = search.fetch_gfz_forecast_csv()
+    def test_rejects_a_non_object_payload(self):
+        for payload in ['[]', 'null', '3']:
+            with support.patch_http({'HpoForecast': payload}):
+                with self.assertRaises(DataValidationError, msg=payload):
+                    search.fetch_gfz_forecast()
+
+    def test_skips_unusable_bins_but_keeps_the_good_ones(self):
+        payload = json.dumps({"MEDIAN": {
+            "2026-10-11T09:00:00.000": 3.0,
+            "2026-10-11T12:00:00.000": -1,
+            "2026-10-11T15:00:00.000": 99,
+            "2026-10-11T18:00:00.000": None,
+            "2026-10-11T21:00:00.000": 5.0,
+        }})
+        with support.patch_http({'HpoForecast': payload}):
+            records = search.fetch_gfz_forecast()
 
         self.assertEqual(
             records,
             [
-                {"datetime": "2026-03-15T00:00:00Z", "kp": 3.0},
-                {"datetime": "2026-03-15T12:00:00Z", "kp": 5.0},
+                {"datetime": "2026-10-11T09:00:00Z", "kp": 3.0},
+                {"datetime": "2026-10-11T21:00:00Z", "kp": 5.0},
             ],
         )
 
-    def test_rejects_a_csv_with_no_usable_rows(self):
-        csv = "Time (UTC),median\nnot-a-date,4.0\n"
-        with support.patch_http({'spaceweather': csv}):
+    def test_rejects_a_document_with_no_usable_bins(self):
+        payload = json.dumps({"MEDIAN": {"2026-10-11T09:00:00.000": -1}})
+        with support.patch_http({'HpoForecast': payload}):
             with self.assertRaises(DataValidationError):
-                search.fetch_gfz_forecast_csv()
+                search.fetch_gfz_forecast()
 
-    def test_rejects_an_empty_csv(self):
-        with support.patch_http({'spaceweather': ''}):
-            with self.assertRaises(DataValidationError):
-                search.fetch_gfz_forecast_csv()
+    def test_output_is_chronological(self):
+        """JSON object order is not guaranteed, so it must be sorted."""
+        payload = json.dumps({"MEDIAN": {
+            "2026-10-11T21:00:00.000": 1.0,
+            "2026-10-11T09:00:00.000": 2.0,
+            "2026-10-11T15:00:00.000": 3.0,
+        }})
+        with support.patch_http({'HpoForecast': payload}):
+            records = search.fetch_gfz_forecast()
 
-    def test_ignores_rows_too_short_to_hold_a_value(self):
-        csv = (
-            "Time (UTC),minimum,q,median\n"
-            "15-03-2026 00:00,x\n"
-            "15-03-2026 03:00,x,x,4.0\n"
-        )
-        with support.patch_http({'spaceweather': csv}):
-            records = search.fetch_gfz_forecast_csv()
+        stamps = [record['datetime'] for record in records]
+        self.assertEqual(stamps, sorted(stamps))
 
-        self.assertEqual(records, [{"datetime": "2026-03-15T03:00:00Z", "kp": 4.0}])
-
-    def test_off_grid_times_are_snapped_onto_real_bins(self):
-        csv = (
-            "Time (UTC),median\n"
-            "15-03-2026 22:00,2.0\n"
-            "15-03-2026 23:45,3.0\n"
-        )
-        with support.patch_http({'spaceweather': csv}):
-            records = search.fetch_gfz_forecast_csv()
+    def test_off_grid_bins_are_snapped_onto_real_bins(self):
+        payload = json.dumps({"MEDIAN": {
+            "2026-10-11T22:00:00.000": 2.0,
+            "2026-10-11T23:45:00.000": 3.0,
+        }})
+        with support.patch_http({'HpoForecast': payload}):
+            records = search.fetch_gfz_forecast()
 
         # 22:00 belongs to its own evening, not to midnight of the same day.
-        self.assertEqual(records[0]['datetime'], '2026-03-15T21:00:00Z')
-        self.assertEqual(records[1]['datetime'], '2026-03-16T00:00:00Z')
+        self.assertEqual(records[0]['datetime'], '2026-10-11T21:00:00Z')
+        self.assertEqual(records[1]['datetime'], '2026-10-12T00:00:00Z')
 
 
 class TestFetchGfzRealtimeJson(unittest.TestCase):
@@ -116,8 +120,8 @@ class TestFetchGfzRealtimeJson(unittest.TestCase):
         with support.patch_http():
             records = search.fetch_gfz_realtime_json()
 
-        self.assertEqual(len(records), 16)
-        self.assertEqual(records[0], {"datetime": "2026-09-14T00:00:00Z", "kp": 1.0})
+        self.assertEqual(len(records), 29)
+        self.assertEqual(records[0], {"datetime": "2026-10-08T00:00:00Z", "kp": 1.0})
 
     def test_drops_unmeasured_bins(self):
         """Future or missing bins arrive as null or -1 and are not readings."""
@@ -250,6 +254,47 @@ class TestPipeline(unittest.TestCase):
         for record in overlapping:
             self.assertEqual(records[record['datetime']], record['kp'])
 
+    def forecast_only_bins(self, published):
+        """Published bins that no measurement covers.
+
+        Measured Kp outranks every forecast, so a comparison between two
+        forecast feeds has to leave the measured bins out of it.
+        """
+        with support.patch_http():
+            measured = {record['datetime'] for record in search.fetch_gfz_realtime_json()}
+
+        return {stamp: kp for stamp, kp in published.items() if stamp not in measured}
+
+    def test_the_gfz_model_outranks_the_noaa_profile(self):
+        """GFZ's per-bin model is preferred where both feeds cover a bin."""
+        self.run_pipeline()
+        published = self.forecast_only_bins(
+            {record['datetime']: record['kp'] for record in self.load()}
+        )
+
+        with support.patch_http():
+            model = search.fetch_gfz_forecast()
+
+        overlapping = [m for m in model if m['datetime'] in published]
+        self.assertTrue(overlapping, 'fixtures should overlap the window')
+        for record in overlapping:
+            self.assertEqual(published[record['datetime']], record['kp'])
+
+    def test_the_noaa_profile_takes_over_when_the_gfz_model_is_gone(self):
+        with patch.object(search, 'fetch_gfz_forecast', side_effect=OSError("down")):
+            self.assertTrue(self.run_pipeline())
+        published = self.forecast_only_bins(
+            {record['datetime']: record['kp'] for record in self.load()}
+        )
+
+        with support.patch_http():
+            profile = search.noaa.fetch_3day_forecast()
+
+        overlapping = [p for p in profile if p['datetime'] in published]
+        self.assertTrue(overlapping)
+        for record in overlapping:
+            self.assertEqual(published[record['datetime']], record['kp'])
+
     def test_a_frozen_gfz_forecast_no_longer_costs_us_the_future(self):
         """Regression for the October 2026 outage.
 
@@ -259,13 +304,13 @@ class TestPipeline(unittest.TestCase):
         published series kept its past and lost its entire forecast.
         """
         stale_day = support.FIXTURE_NOW - timedelta(days=8)
-        rows = ["Time (UTC),median"]
-        for index in range(25):
-            moment = stale_day + timedelta(hours=3 * index)
-            rows.append(f"{moment.strftime('%d-%m-%Y %H:%M')},1.0")
-        stale_csv = "\n".join(rows) + "\n"
+        frozen = {
+            (stale_day + timedelta(hours=3 * index)).strftime('%Y-%m-%dT%H:%M:00.000'): 1.0
+            for index in range(25)
+        }
+        stale_json = json.dumps({"MEDIAN": frozen})
 
-        self.assertTrue(self.run_pipeline({'spaceweather': stale_csv}))
+        self.assertTrue(self.run_pipeline({'HpoForecast': stale_json}))
         records = self.load()
 
         horizon = series_horizon(records, support.FIXTURE_NOW)
@@ -280,7 +325,7 @@ class TestPipeline(unittest.TestCase):
         """Each feed can vanish and still leave a publishable series."""
         feeds = [
             'fetch_gfz_realtime_json',
-            'fetch_gfz_forecast_csv',
+            'fetch_gfz_forecast',
         ]
         for name in feeds:
             with self.subTest(source=name):
@@ -290,7 +335,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_survives_the_loss_of_the_gfz_entirely(self):
         with patch.object(search, 'fetch_gfz_realtime_json', side_effect=OSError("down")):
-            with patch.object(search, 'fetch_gfz_forecast_csv', side_effect=OSError("down")):
+            with patch.object(search, 'fetch_gfz_forecast', side_effect=OSError("down")):
                 self.assertTrue(self.run_pipeline())
 
         self.assertEqual(validate_series(self.load()), [])
@@ -322,7 +367,7 @@ class TestPipeline(unittest.TestCase):
             self.assertEqual(handle.read(), before)
 
     def test_refuses_to_publish_a_corrupt_series(self):
-        corrupt = ([{"datetime": "2026-09-16T07:00:00Z", "kp": 1.0}] * 8, {})
+        corrupt = ([{"datetime": "2026-10-11T07:00:00Z", "kp": 1.0}] * 8, {})
 
         with patch('search.build_series', return_value=corrupt):
             with self.assertRaises(DataValidationError):

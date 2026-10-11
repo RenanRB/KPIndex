@@ -144,7 +144,7 @@ def check_sources(now=None) -> list[str]:
     now = now or utcnow()
 
     feeds = [
-        ('GFZ forecast', search.fetch_gfz_forecast_csv),
+        ('GFZ forecast', search.fetch_gfz_forecast),
         ('NOAA 3-day', noaa.fetch_3day_forecast),
         ('NOAA 27-day', noaa.fetch_27day_outlook),
     ]
