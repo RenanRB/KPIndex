@@ -28,6 +28,7 @@ from kp_core import (
     clean_kp,
     fetch_json,
     fetch_source,
+    reject_stale_sources,
     format_timestamp,
     is_aligned,
     parse_timestamp,
@@ -67,6 +68,16 @@ MIN_FORECAST_DAYS = 3
 # How many days of realtime history to request. One extra day is asked for
 # so the window's start is never clipped by the request boundary.
 REALTIME_LOOKBACK_DAYS = HISTORY_DAYS + 1
+
+# How far past now each forecast feed must reach to be trusted at all. A feed
+# that falls short is being served but no longer maintained, which an HTTP
+# status cannot tell us — only the newest timestamp in the document can.
+# Measured feeds are absent here on purpose: they do not predict.
+SOURCE_MIN_HORIZONS = {
+    'GFZ forecast': timedelta(hours=24),
+    'NOAA 3-day': timedelta(hours=24),
+    'NOAA 27-day': timedelta(days=5),
+}
 
 
 def fetch_gfz_forecast() -> list[dict]:
@@ -195,14 +206,21 @@ def get_kp_pipeline() -> bool:
         ('NOAA 27-day', fetch_source('NOAA 27-day', noaa.fetch_27day_outlook)),
     ]
 
-    available = [(name, records) for name, records in sources if records is not None]
-    if not available:
-        logging.error("Every source is unavailable; keeping the previous data.")
-        return False
-
     unavailable = [name for name, records in sources if records is None]
     if unavailable:
         logging.warning("Unavailable source(s): %s", ', '.join(unavailable))
+
+    available = [(name, records) for name, records in sources if records is not None]
+
+    # Reachable is not the same as current: drop whatever has gone stale so
+    # the next source in the order gets its turn.
+    available, stale_notes = reject_stale_sources(available, now, SOURCE_MIN_HORIZONS)
+    for note in stale_notes:
+        logging.warning("%s", note)
+
+    if not available:
+        logging.error("No source is both reachable and current; keeping the previous data.")
+        return False
 
     final_result, provenance = build_series(
         available, now, history_days=HISTORY_DAYS, forecast_days=FORECAST_DAYS

@@ -43,8 +43,10 @@ that offers it:
 | 3 | NOAA 3-day | a real per-bin profile, 3 days out |
 | 4 | NOAA 27-day | one figure per day, fills the tail |
 
-That ordering is what makes the output survive an outage: a feed that freezes
-stops offering bins inside the window and the next source takes over.
+That ordering is what makes the output survive an outage. A feed is dropped
+whenever it stops reaching into the future, judged on the newest timestamp
+inside the document rather than on its HTTP status — being served is not the
+same as being maintained. The next source then takes its place.
 
 The NOAA 27-day outlook publishes a single figure per day — the largest Kp
 expected — repeated across that day's eight bins. **Where the tail comes from
@@ -88,6 +90,51 @@ differs a lot between them:
 | --- | --- | --- | --- |
 | `kp.json` | 1.3 h | 11.8 h | 18 h |
 | `kp_noaa.json` | 24.0 h | 48.0 h | 72 h |
+
+## Kp is global, not regional
+
+Kp is a *planetary* index: one number per three-hour bin for the whole Earth,
+derived from 13 mid-latitude observatories. There is no Brazilian Kp or
+European Kp — if an app shows different numbers per region, it is not showing
+Kp as defined.
+
+What genuinely does vary by place is the **local K index**, measured at a
+single observatory on the same 0–9 scale. GFZ forecasts those too, and they
+disagree with each other and with Kp for the same hour:
+
+```
+                       09:00  12:00  15:00  18:00
+Kp GLOBAL (planetary)   2.00   2.00   1.33   1.00
+K  UPS (Uppsala, SE)     2.0    3.0    3.0    1.0
+K  BFE (Brorfelde, DK)   2.0    2.0    2.0    4.0
+K  CNB (Canberra, AU)    3.0    3.0    1.0    1.0
+```
+
+Source: [`forecast_mean_bars_K.json`](https://isdc-data.gfz.de/geomagnetism/HpoForecast/v0102/output/H/json/forecast_mean_bars_K.json)
+— 13 stations: MEA, SIT, LER, UPS, OTT, ESK, BFE, WNG, NGK, HAD, FRD, CNB, EYR.
+**None is in South America**, so this product cannot give a local index for
+Brazil. The nearest usable alternative would be a magnetometer from
+[INTERMAGNET](https://intermagnet.org/) (Brazil has VSS/Vassouras and
+TTB/Tatuoca), which would be a different product from this one.
+
+## Why only GFZ and NOAA
+
+Checked while looking for redundancy, with what each actually returned:
+
+| Source | Horizon | Verdict |
+| --- | --- | --- |
+| NOAA 27-day outlook | ~27 days | **the only 7-day Kp forecast found** |
+| GFZ Hpo forecast | ~68 h | used, 3-day model consensus |
+| NOAA 3-day forecast | ~72 h | used, per-bin profile |
+| GFZ Kp app/json | measured | used, the realtime segment |
+| NOAA `planetary_k_index_1m` | ~6 h of nowcast | 1-minute estimate that swings within a bin; not the consolidated Kp |
+| NOAA `geospace_pred_est_kp` | ~1 h | too short to matter here |
+| BGS, auroraforecast.space | — | 404 / TLS failure |
+
+So **beyond three days there is no alternative to the NOAA 27-day outlook**.
+That is a limit of the field, not of this project: the redundancy that exists
+is in the 0–3 day range, which is why the window is filled by four feeds there
+and by one at the tail.
 
 ## Layout
 

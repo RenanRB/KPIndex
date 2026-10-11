@@ -171,6 +171,43 @@ def build_series(sources, now: datetime, history_days: int, forecast_days: int):
     return ordered, provenance
 
 
+def reject_stale_sources(sources, now: datetime, minimum_horizons: dict):
+    """Drops forecast feeds that have stopped reaching into the future.
+
+    A feed can answer 200 with a perfectly well-formed document and still be
+    worthless, because nobody is updating it any more. HTTP status says
+    nothing about that; only the newest timestamp inside the document does.
+
+    `minimum_horizons` maps a source name to how far past `now` its data must
+    reach. A name absent from the map is never judged — that is how measured
+    feeds, which by definition do not predict, are left alone.
+
+    Returns (kept, rejected_notes).
+    """
+    kept = []
+    notes = []
+
+    for name, records in sources:
+        requirement = minimum_horizons.get(name)
+
+        if requirement is None or not records:
+            kept.append((name, records))
+            continue
+
+        horizon = series_horizon(records, now)
+        if horizon < requirement:
+            notes.append(
+                f"{name} only reaches {horizon.total_seconds() / 3600:.1f}h ahead, "
+                f"under the {requirement.total_seconds() / 3600:.0f}h it should - "
+                f"treating it as stale"
+            )
+            continue
+
+        kept.append((name, records))
+
+    return kept, notes
+
+
 def series_horizon(records: list[dict], now: datetime) -> timedelta:
     """How far beyond `now` the last bin of a series reaches."""
     if not records:

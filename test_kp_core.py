@@ -28,6 +28,7 @@ from kp_core import (
     format_timestamp,
     is_aligned,
     parse_timestamp,
+    reject_stale_sources,
     series_horizon,
     snap_to_bin,
     utcnow,
@@ -217,6 +218,64 @@ class TestBuildSeries(unittest.TestCase):
         records, _ = build_series([('wide', wide)], self.NOW, history_days=0, forecast_days=7)
 
         self.assertEqual(records[0]['datetime'], '2026-03-15T12:00:00Z')
+
+
+class TestRejectStaleSources(unittest.TestCase):
+    """Being served with a 200 is not the same as being maintained."""
+
+    NOW = datetime(2026, 3, 15, 12, 0)
+    REQUIRE = {'forecast': timedelta(hours=24)}
+
+    def test_keeps_a_feed_that_still_reaches_ahead(self):
+        fresh = bins(datetime(2026, 3, 15, 12), 25)  # 72h ahead
+        kept, notes = reject_stale_sources([('forecast', fresh)], self.NOW, self.REQUIRE)
+
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(notes, [])
+
+    def test_drops_a_feed_frozen_in_the_past(self):
+        """The exact October 2026 shape: well-formed, 200, a week old."""
+        frozen = bins(datetime(2026, 3, 5), 25)
+        kept, notes = reject_stale_sources([('forecast', frozen)], self.NOW, self.REQUIRE)
+
+        self.assertEqual(kept, [])
+        self.assertEqual(len(notes), 1)
+        self.assertIn('stale', notes[0])
+
+    def test_drops_a_feed_that_only_just_reaches_now(self):
+        """Still 'current' by timestamp, but no longer useful as a forecast."""
+        barely = bins(datetime(2026, 3, 15, 0), 5)  # ends at 12:00, 0h ahead
+        kept, notes = reject_stale_sources([('forecast', barely)], self.NOW, self.REQUIRE)
+
+        self.assertEqual(kept, [])
+        self.assertEqual(len(notes), 1)
+
+    def test_never_judges_a_source_with_no_requirement(self):
+        """Measured feeds do not predict, so a horizon rule cannot apply."""
+        measured = bins(datetime(2026, 3, 13), 20)  # entirely in the past
+        kept, notes = reject_stale_sources([('measured', measured)], self.NOW, self.REQUIRE)
+
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(notes, [])
+
+    def test_a_stale_feed_lets_the_next_one_take_over(self):
+        frozen = bins(datetime(2026, 3, 5), 25, kp=9.0)
+        tail = bins(datetime(2026, 3, 15, 12), 60, kp=3.0)
+
+        kept, _ = reject_stale_sources(
+            [('forecast', frozen), ('tail', tail)], self.NOW, self.REQUIRE
+        )
+        records, provenance = build_series(kept, self.NOW, history_days=2, forecast_days=7)
+
+        self.assertNotIn('forecast', provenance.values())
+        self.assertEqual(series_horizon(records, self.NOW), timedelta(days=7))
+
+    def test_passes_through_absent_and_empty_feeds(self):
+        kept, notes = reject_stale_sources(
+            [('forecast', None), ('forecast', [])], self.NOW, self.REQUIRE
+        )
+        self.assertEqual(len(kept), 2)
+        self.assertEqual(notes, [])
 
 
 class TestSeriesHorizon(unittest.TestCase):

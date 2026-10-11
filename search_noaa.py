@@ -16,6 +16,7 @@ import noaa
 from kp_core import (
     build_series,
     fetch_source,
+    reject_stale_sources,
     series_horizon,
     utcnow,
     validate_series,
@@ -35,6 +36,13 @@ FORECAST_DAYS = 7
 # previous one.
 MIN_FORECAST_DAYS = 3
 
+# How far past now each feed must reach to be trusted at all; being served
+# is not the same as being maintained.
+SOURCE_MIN_HORIZONS = {
+    'NOAA 3-day': timedelta(hours=24),
+    'NOAA 27-day': timedelta(days=5),
+}
+
 
 def merge_and_save_data() -> bool:
     """Runs the full pipeline.
@@ -51,14 +59,19 @@ def merge_and_save_data() -> bool:
         ('NOAA 27-day', fetch_source('NOAA 27-day', lambda: noaa.fetch_27day_outlook(url_daily))),
     ]
 
-    available = [(name, records) for name, records in sources if records is not None]
-    if not available:
-        logging.error("Every source is unavailable; keeping the previous data.")
-        return False
-
     unavailable = [name for name, records in sources if records is None]
     if unavailable:
         logging.warning("Unavailable source(s): %s", ', '.join(unavailable))
+
+    available = [(name, records) for name, records in sources if records is not None]
+
+    available, stale_notes = reject_stale_sources(available, now, SOURCE_MIN_HORIZONS)
+    for note in stale_notes:
+        logging.warning("%s", note)
+
+    if not available:
+        logging.error("No source is both reachable and current; keeping the previous data.")
+        return False
 
     result, provenance = build_series(
         available, now, history_days=HISTORY_DAYS, forecast_days=FORECAST_DAYS
