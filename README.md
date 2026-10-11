@@ -113,9 +113,32 @@ K  CNB (Canberra, AU)    3.0    3.0    1.0    1.0
 Source: [`forecast_mean_bars_K.json`](https://isdc-data.gfz.de/geomagnetism/HpoForecast/v0102/output/H/json/forecast_mean_bars_K.json)
 — 13 stations: MEA, SIT, LER, UPS, OTT, ESK, BFE, WNG, NGK, HAD, FRD, CNB, EYR.
 **None is in South America**, so this product cannot give a local index for
-Brazil. The nearest usable alternative would be a magnetometer from
-[INTERMAGNET](https://intermagnet.org/) (Brazil has VSS/Vassouras and
-TTB/Tatuoca), which would be a different product from this one.
+Brazil, and there is no forecast of local K anywhere near it.
+
+Brazil does have magnetometers in [INTERMAGNET](https://intermagnet.org/)
+(VSS/Vassouras, TTB/Tatuoca), but two things rule them out as a drop-in here:
+they publish *measurements*, not a forecast, and INTERMAGNET data is
+[CC BY-NC 4.0](https://intermagnet.org/data_conditions.html) — commercial use,
+sale or bulk distribution needs written permission from each operating
+institute. Neither Brazilian observatory appears on the list of institutes with
+broader terms. Everything this project publishes today comes from GFZ
+(CC BY 4.0) and NOAA SWPC (US government work, public domain), both usable
+commercially with attribution, so pulling in NC-licensed data would quietly
+restrict the whole feed.
+
+### Mixing local K into this feed would be a mistake
+
+Local K and Kp share the 0–9 scale but are different quantities, so a feed
+whose `kp` field sometimes meant one and sometimes the other would be
+unreadable — a consumer could not tell which. Deriving local K from global Kp
+is also an open research problem, not arithmetic: published approaches use
+per-station conversion tables or neural networks, and the relationship shifts
+with geomagnetic latitude and local time. Geographic nearness is the wrong
+criterion anyway; a station at a similar geomagnetic latitude is more
+representative than a closer one.
+
+If local indices are ever wanted here, they belong in their own file with
+their own field name, never blended into `kp`.
 
 ## Why only GFZ and NOAA
 
