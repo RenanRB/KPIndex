@@ -8,3 +8,6 @@ __pycache__/
 venv/
 .coverage
 htmlcov/
+
+# Pesquisa e rascunhos internos: nao vao para o repositorio publico.
+_private/
