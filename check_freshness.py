@@ -15,6 +15,7 @@ actually hurts a consumer: data that no longer covers the present.
 """
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,7 @@ from kp_core import fetch_source, parse_timestamp, series_horizon, utcnow
 MAX_AGE_HOURS = {
     'kp.json': 18,
     'kp_noaa.json': 72,
+    'k_br.json': 24,
 }
 DEFAULT_MAX_AGE_HOURS = 24
 
@@ -40,7 +42,13 @@ DEFAULT_MAX_AGE_HOURS = 24
 # consumer, whatever its file timestamp says.
 MIN_HORIZON_HOURS = 24
 
-DATA_FILES = ['data/kp.json', 'data/kp_noaa.json']
+DATA_FILES = ['data/kp.json', 'data/kp_noaa.json', 'data/k_br.json']
+
+# Files that measure rather than predict. Their last bin is always in the
+# past, so the forward-horizon rule cannot apply; they are judged on how far
+# behind the newest reading is instead.
+OBSERVED_FILES = {'k_br.json'}
+MAX_OBSERVED_LAG_HOURS = 24
 
 # Each forecast feed should reach at least this far past now. A feed that
 # falls below its figure has stopped being updated, whatever its HTTP
@@ -113,11 +121,19 @@ def check_file(path: str, now=None, commit_time=last_commit_time) -> str:
 
     horizon = file_horizon(path, now)
     horizon_hours = horizon.total_seconds() / 3600
+    observed = os.path.basename(path.replace('\\', '/')) in OBSERVED_FILES
 
-    summary = (
-        f"{path}: last changed {age_hours:.1f}h ago (budget {budget}h), "
-        f"reaches {horizon_hours:.1f}h ahead (minimum {MIN_HORIZON_HOURS}h)"
-    )
+    if observed:
+        lag_hours = -horizon_hours
+        summary = (
+            f"{path}: last changed {age_hours:.1f}h ago (budget {budget}h), "
+            f"newest reading {lag_hours:.1f}h old (limit {MAX_OBSERVED_LAG_HOURS}h)"
+        )
+    else:
+        summary = (
+            f"{path}: last changed {age_hours:.1f}h ago (budget {budget}h), "
+            f"reaches {horizon_hours:.1f}h ahead (minimum {MIN_HORIZON_HOURS}h)"
+        )
 
     if age_hours > budget:
         raise FreshnessError(
@@ -125,7 +141,14 @@ def check_file(path: str, now=None, commit_time=last_commit_time) -> str:
             f"budget. The upstream feed is most likely down."
         )
 
-    if horizon_hours < MIN_HORIZON_HOURS:
+    if observed:
+        # A measured series never reaches ahead; it is late, not short.
+        if lag_hours > MAX_OBSERVED_LAG_HOURS:
+            raise FreshnessError(
+                f"{path} has no reading newer than {lag_hours:.1f}h, over the "
+                f"{MAX_OBSERVED_LAG_HOURS}h limit. The feed has stopped reporting."
+            )
+    elif horizon_hours < MIN_HORIZON_HOURS:
         raise FreshnessError(
             f"{path} only reaches {horizon_hours:.1f}h into the future, under "
             f"the {MIN_HORIZON_HOURS}h minimum. The data no longer covers the present."

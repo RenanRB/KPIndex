@@ -22,6 +22,7 @@ FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures
 #   gfz_forecast.json  11 Oct 09:00 - 14 Oct 09:00
 #   noaa_3day.txt      11 Oct - 13 Oct       (issued 10 Oct)
 #   noaa_27day.txt      5 Oct - 31 Oct       (issued  5 Oct)
+#   embrace_ksa_*.txt   9, 10, 11 Oct        (measured, local K)
 #
 # Together they cover the 2-days-back to 7-days-ahead window around:
 FIXTURE_NOW = datetime(2026, 10, 11, 12, 0)
@@ -29,6 +30,10 @@ FIXTURE_NOW = datetime(2026, 10, 11, 12, 0)
 # Matched against the requested URL, longest-lived identifiers first.
 FIXTURES = [
     ('HpoForecast', 'gfz_forecast.json'),
+    # The EMBRACE feed is one file per day, matched on the date in the URL.
+    ('ksa/2026/2026-10-09', 'embrace_ksa_2026-10-09.txt'),
+    ('ksa/2026/2026-10-10', 'embrace_ksa_2026-10-10.txt'),
+    ('ksa/2026/2026-10-11', 'embrace_ksa_2026-10-11.txt'),
     ('kp.gfz-potsdam.de', 'gfz_realtime.json'),
     ('27-day-outlook', 'noaa_27day.txt'),
     ('3-day-geomag', 'noaa_3day.txt'),
@@ -79,6 +84,11 @@ def fake_get(overrides=None):
         for fragment, filename in FIXTURES:
             if fragment in url:
                 return FakeResponse(read_fixture(filename))
+
+        if '/ksa/' in url:
+            # A day we did not capture stands in for one INPE has not written
+            # yet, which the reader must tolerate rather than fail on.
+            raise FileNotFoundError(f"no EMBRACE fixture for {url}")
 
         raise AssertionError(f"No fixture registered for {url}")
 

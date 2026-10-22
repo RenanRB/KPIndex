@@ -15,6 +15,7 @@ Two files are published, both refreshed hourly by GitHub Actions:
 | --- | --- | --- |
 | [`data/kp.json`](data/kp.json) | GFZ measured + GFZ forecast + NOAA 3-day + NOAA 27-day | 2 days of past, 7 days ahead |
 | [`data/kp_noaa.json`](data/kp_noaa.json) | NOAA 3-day + NOAA 27-day | 7 days ahead, forecast only |
+| [`data/k_br.json`](data/k_br.json) | INPE/EMBRACE | 2 days of past, **measured, Brazil only** |
 
 Both windows are anchored on the current time, not on the data, so the span is
 the same on every run.
@@ -30,6 +31,23 @@ Each file is a chronological JSON array of three-hour bins:
 
 - `datetime` — UTC, always on a real Kp bin (00, 03, 06, 09, 12, 15, 18, 21).
 - `kp` — always a JSON number in the 0–9 range.
+
+### `k_br.json` is a different quantity
+
+It carries a **`k`** field, not `kp`, and the distinction matters. Kp is
+planetary: one number for the whole Earth. `k` is the **local** K index
+measured over Brazil. Both use the 0–9 scale, so nothing but the field name
+tells them apart — never read one as the other.
+
+They genuinely disagree. Over four months of 2026 the Brazilian index ran a
+mean **+1.08** above global Kp, reaching **+3.3** during quiet periods, because
+low geomagnetic latitude sits under the equatorial electrojet and the South
+Atlantic Anomaly. During strong storms the two converge.
+
+This file is also the only one here that is **measurement, not forecast**: it
+covers the recent past and stops at the newest bin INPE has published, normally
+an hour or so behind, occasionally up to nine. It has no future and no gap-free
+guarantee — missing bins happen on about 4% of days.
 
 ### How a bin is chosen
 
@@ -92,6 +110,8 @@ changes.
 | --- | --- |
 | `kp_core.py` | Shared fetching, Kp invariants, windowing and atomic writes |
 | `noaa.py` | Parsers for the two NOAA SWPC products |
+| `embrace.py` | Reader for INPE's Brazilian local K index |
+| `search_embrace.py` | Builds `data/k_br.json` |
 | `search.py` | Builds `data/kp.json` (GFZ + NOAA) |
 | `search_noaa.py` | Builds `data/kp_noaa.json` (NOAA only) |
 | `validate_data.py` | Audits published files; used as the CI gate |
@@ -119,6 +139,7 @@ Tests never touch the network: they run against the captured documents in
   [Hpo forecast](https://spaceweather.gfz.de/products-data/observatory-based-geomagnetic-forecasts/forecasting-global-kp-and-hpo-indices)
   consensus of three models (CC BY 4.0)
 - [NOAA SWPC](https://www.swpc.noaa.gov/) — 3-day geomagnetic forecast and 27-day outlook
+- [INPE/EMBRACE](https://embracedata.inpe.br/) — Brazilian local K index
 
 > **Note.** The GFZ forecast moved to the Hpo product in October 2026; the
 > previous PAGER/SWIFT CSV was retired upstream.
@@ -134,6 +155,11 @@ Tests never touch the network: they run against the captured documents in
   under CC BY 4.0*. The data **has been modified**: bins are selected, snapped to
   the three-hour grid, merged across sources and re-serialised as JSON.
 - **NOAA SWPC**, a work of the US federal government, in the public domain.
+- **INPE/EMBRACE**, free to use including commercially. INPE's Operations Team
+  confirmed in writing on 2026-10-21 that the scientific data follow the
+  Federal Executive's Open Data Policy and carry no use restriction, and that
+  the CC BY-ND notice in the portal footer applies to the website content
+  only. No citation format is required; we credit them anyway.
 
 CC BY 4.0 requires attribution, a link to the licence and an indication of
 changes, so anyone redistributing `data/` must carry the notice above. That is

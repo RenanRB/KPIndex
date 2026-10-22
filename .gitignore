@@ -11,3 +11,7 @@ htmlcov/
 
 # Pesquisa e rascunhos internos: nao vao para o repositorio publico.
 _private/
+new_k_br.json
+
+# macOS
+.DS_Store

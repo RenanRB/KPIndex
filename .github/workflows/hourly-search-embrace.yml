@@ -1,0 +1,62 @@
+name: get local k index from embrace
+
+on:
+  schedule:
+  - cron: "32 * * * *" # Offset from the other data workflows to avoid push races
+  workflow_dispatch:
+
+# All data workflows commit to the same branch, so they must not push at once.
+concurrency:
+  group: kp-data-push
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch local K data
+        run: python search_embrace.py
+
+      - name: Commit updated data
+        run: |
+          # search_embrace.py writes nothing when the source was unreachable
+          # or when its newest reading is too old to publish.
+          if [ ! -s new_k_br.json ]; then
+            echo "No new data produced, keeping data/k_br.json as is."
+            exit 0
+          fi
+
+          python validate_data.py new_k_br.json
+
+          if cmp -s new_k_br.json data/k_br.json; then
+            echo "Data unchanged."
+            exit 0
+          fi
+
+          mv new_k_br.json data/k_br.json
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add data/k_br.json
+          git commit -m "Update k_br.json"
+
+          for attempt in 1 2 3; do
+            if git pull --rebase --autostash && git push; then
+              exit 0
+            fi
+            echo "Push attempt $attempt failed, retrying..."
+            sleep 10
+          done
+          echo "::error::Could not push after 3 attempts."
+          exit 1

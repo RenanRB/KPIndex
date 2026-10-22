@@ -15,6 +15,14 @@ import sys
 from kp_core import DataValidationError, validate_series
 
 DATA_DIR = 'data'
+
+# Which key holds the index in each file. The planetary series uses 'kp' and
+# the Brazilian local series uses 'k': same 0-9 scale, different quantities,
+# so they are deliberately not interchangeable. Resolved by filename rather
+# than sniffed from the content, so a file with the wrong field fails instead
+# of being quietly accepted.
+VALUE_FIELDS = {'k_br.json': 'k', 'new_k_br.json': 'k'}
+DEFAULT_VALUE_FIELD = 'kp'
 # Freshness is only meaningful for a file the scheduler keeps rewriting, so
 # it is reported rather than enforced here.
 EXPECTED_MINIMUM_RECORDS = 8
@@ -31,7 +39,10 @@ def validate_file(path: str) -> list[str]:
         except ValueError as error:
             raise DataValidationError(f"{path} is not valid JSON: {error}")
 
-    return validate_series(records, minimum_records=EXPECTED_MINIMUM_RECORDS)
+    field = VALUE_FIELDS.get(os.path.basename(path), DEFAULT_VALUE_FIELD)
+    return validate_series(
+        records, minimum_records=EXPECTED_MINIMUM_RECORDS, value_field=field
+    )
 
 
 def describe(path: str) -> str:

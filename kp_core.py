@@ -133,7 +133,8 @@ def floor_to_bin(moment: datetime) -> datetime:
     )
 
 
-def build_series(sources, now: datetime, history_days: int, forecast_days: int):
+def build_series(sources, now: datetime, history_days: int, forecast_days: int,
+                 value_field: str = 'kp'):
     """Fills a window anchored on `now` from sources in priority order.
 
     `sources` is a sequence of (name, records), most trustworthy first. Each
@@ -164,7 +165,7 @@ def build_series(sources, now: datetime, history_days: int, forecast_days: int):
             if key in chosen:
                 continue  # a higher-priority source already owns this bin
 
-            chosen[key] = {"datetime": key, "kp": record['kp']}
+            chosen[key] = {"datetime": key, value_field: record[value_field]}
             provenance[key] = name
 
     ordered = [chosen[key] for key in sorted(chosen)]
@@ -269,12 +270,18 @@ def clean_kp(value) -> float:
     return number
 
 
-def validate_series(records: list[dict], minimum_records: int = 8) -> list[str]:
+def validate_series(records: list[dict], minimum_records: int = 8,
+                    value_field: str = 'kp') -> list[str]:
     """Checks a finished series against every Kp invariant.
 
     Raises DataValidationError for corruption that must block publication,
     and returns a list of non-blocking warnings (currently timeline gaps,
     which are visible to consumers but not wrong).
+
+    `value_field` is the key holding the index. It is 'kp' for the planetary
+    series and 'k' for a local one: both live on the same 0-9 scale and obey
+    the same bin rules, but they are different quantities and must never be
+    published under the same name.
     """
     if not isinstance(records, list):
         raise DataValidationError(f"Series must be a list, got {type(records).__name__}")
@@ -291,7 +298,7 @@ def validate_series(records: list[dict], minimum_records: int = 8) -> list[str]:
         if not isinstance(record, dict):
             raise DataValidationError(f"Record {position} is not an object: {record!r}")
 
-        missing = {'datetime', 'kp'} - set(record)
+        missing = {'datetime', value_field} - set(record)
         if missing:
             raise DataValidationError(
                 f"Record {position} is missing {sorted(missing)}: {record!r}"
@@ -304,7 +311,7 @@ def validate_series(records: list[dict], minimum_records: int = 8) -> list[str]:
                 f"Record {position} is not on a three-hour Kp bin: {record['datetime']}"
             )
 
-        value = record['kp']
+        value = record[value_field]
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             raise DataValidationError(
                 f"Record {position} has a non-numeric Kp: {value!r}"
